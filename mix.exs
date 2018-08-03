@@ -1,9 +1,9 @@
-defmodule MembraneElementTimedaudiomixer.MixProject do
+defmodule Membrane.Element.LiveAudioMixer.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :membrane_element_timedaudiomixer,
+      app: :membrane_element_live_audiomixer,
       version: "0.1.0",
       elixir: "~> 1.6",
       start_permanent: Mix.env() == :prod,

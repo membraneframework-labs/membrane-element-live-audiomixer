@@ -40,11 +40,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     } = options
 
     state = %{
-      interval: 1 |> Membrane.Time.second(),
+      interval: interval,
       caps: caps,
       sinks: %{},
       playing: false,
-      timer_ref: nil
+      timer_ref: nil,
+      prev_time: nil
     }
 
     {:ok, state}
@@ -52,20 +53,30 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_play(state) do
-    timer_ref = Process.send_after(self(), :tick, Time.to_milliseconds(state.interval))
-    {:ok, %{state | playing: true, timer_ref: timer_ref}}
+    %{
+      interval: interval,
+      caps: caps
+    } = state
+
+    # Should I change this?
+    send(self(), :tick)
+    silence = (2 * interval) |> AudioMix.generate_silence(caps)
+    IO.puts("PAYLOAD: #{byte_size(silence)}")
+
+    {{:ok, buffer: {:source, %Buffer{payload: silence}}},
+     %{state | playing: true, timer_ref: nil, prev_time: Time.monotonic_time()}}
   end
 
   @impl true
   def handle_prepare(:playing, state) do
-    state.timer_ref |> Process.cancel_timer()
+    state.timer_ref |> :timer.cancel()
 
     sinks =
       state.sinks
-      |> Enum.map(fn {sink, {_queue, eos, sz}} ->
-        {sink, {<<>>, eos, 0}}
+      |> Enum.map(fn {sink, {_queue, eos}} ->
+        {sink, {<<>>, eos}}
       end)
-      |> Enum.into(%{})
+      |> Map.new()
 
     {:ok, %{state | playing: false, timer_ref: nil, sinks: sinks}}
   end
@@ -74,31 +85,25 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_pad_added(pad, _context, state) do
-    IO.puts("ADDED: #{inspect(pad)}")
+    # Should I remove this function?
     {:ok, state}
   end
 
   @impl true
   def handle_pad_removed(pad, _context, state) do
-    IO.puts("REMOVED: #{inspect(pad)}")
+    # Should I remove this function?
     state = state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
     {:ok, state}
   end
 
   @impl true
   def handle_event(pad, %Event{type: :sos}, _context, state) do
-    %{
-      interval: interval,
-      caps: caps
-    } = state
-    IO.puts("The start of the stream from the pad #{inspect(pad)}, demand: #{interval |> Caps.time_to_bytes(caps)}")
-
-    state = state |> Helper.Map.put_in([:sinks, pad], %{queue: <<>>, eos: false, sz: 0})
-    {{:ok, demand: {pad, :self, {:set_to, interval |> Caps.time_to_bytes(caps)}}}, state}
+    # We can demand from the pad here or we can just wait for the next tick of the timer. What to do?
+    state = state |> Helper.Map.put_in([:sinks, pad], %{queue: <<>>, eos: false})
+    {:ok, state}
   end
 
   def handle_event(pad, %Event{type: :eos}, _context, state) do
-    IO.puts("The End of the stream from pad: #{inspect(pad)}")
     state = state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
     {:ok, state}
   end
@@ -109,14 +114,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_process1(pad, buffer, _context, state) do
-    IO.puts("Handle process from #{inspect(pad)}")
     %Buffer{payload: payload} = buffer
-    #IO.puts("PAYLOAD: #{byte_size(payload)}")
+
     state =
       state
-      |> Helper.Map.update_in([:sinks, pad], fn %{queue: queue, eos: eos, sz: sz} ->
-        #IO.puts(byte_size(queue <> payload))
-        %{queue: queue <> payload, eos: eos, sz: sz + byte_size(payload)}
+      |> Helper.Map.update_in([:sinks, pad], fn %{queue: queue, eos: eos} ->
+        %{queue: queue <> payload, eos: eos}
       end)
 
     {:ok, state}
@@ -127,58 +130,62 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     IO.puts("TICK")
 
     %{
+      prev_time: prev_time,
       interval: interval,
       caps: caps
     } = state
 
-    number_of_bytes = interval |> Caps.time_to_bytes(caps)
-    timer_ref = Process.send_after(self(), :tick, Time.to_milliseconds(interval) - 100)
+    now_time = Time.monotonic_time()
+    time_diff = now_time - prev_time
 
-    demands =
-      state.sinks
-      |> Enum.map(fn {pad, _value} ->
-        {:demand, {pad, :self,  {:set_to, interval |> Caps.time_to_bytes(caps)}}}
-      end)
-
-  #  IO.puts("bts: #{number_of_bytes}")
+    number_of_bytes = time_diff |> Caps.time_to_bytes(caps)
+    timer_ref = interval |> Helper.Timer.send_after(:tick)
 
     payloads =
       state.sinks
-      |> Enum.map(fn {pad, %{queue: queue, eos: _eos, sz: sz}} ->
-        #IO.puts(byte_size(queue))
+      |> Enum.map(fn {_pad, %{queue: queue, eos: _eos}} ->
         if byte_size(queue) >= number_of_bytes do
-          <<head::binary-size(number_of_bytes), tail::binary>> = queue
-          #IO.puts("#{is_bitstring(head)} #{is_binary(queue)} #{bits}")
+          <<head::binary-size(number_of_bytes), _tail::binary>> = queue
           head
         else
           <<>>
         end
       end)
+      |> Enum.filter(&(byte_size(&1) > 0))
 
-  #  IO.puts("Length: #{length(payloads)}")
+    #IO.puts("Payloads: #{length(payloads)}")
+
+    payloads =
+      if payloads == [] do
+        [time_diff |> AudioMix.generate_silence(caps)]
+      else
+        payloads
+      end
 
     sinks =
       state.sinks
-      |> Enum.map(fn {pad, %{queue: queue, eos: eos, sz: sz}} ->
+      |> Enum.map(fn {pad, %{queue: queue, eos: eos}} ->
         queue =
           if byte_size(queue) >= number_of_bytes do
-            <<head::binary-size(number_of_bytes), tail::binary>> = queue
+            <<_head::binary-size(number_of_bytes), tail::binary>> = queue
             tail
           else
-            queue
+            <<>>
           end
-        {pad, %{queue: queue, eos: eos, sz: sz}}
-      end)
-      |> Map.new
 
-    #IO.puts("#{inspect(sinks)}")
-    #IO.puts("#{inspect(demands)}")
-    #[head | _tail] = payloads
-    #IO.puts("SIZE:")
-    #IO.puts(is_binary(head))
-    #IO.puts("#{byte_size(head)}")
-    {{:ok, demands ++ [buffer: {:source, %Buffer{payload: AudioMix.mix(payloads, caps)}}]}, %{state | sinks: sinks, timer_ref: timer_ref}}
-    # {:ok, state}
+        {pad, %{queue: queue, eos: eos}}
+      end)
+      |> Map.new()
+
+    demands =
+      sinks
+      |> Enum.map(fn {pad, %{queue: queue}} ->
+        {:demand, {pad, :self, {:set_to, 2 * (Caps.time_to_bytes(interval, caps)) - byte_size(queue)}}}
+      end)
+
+    actions = [buffer: {:source, %Buffer{payload: AudioMix.mix(payloads, caps)}}] ++ demands
+
+    {{:ok, actions}, %{state | sinks: sinks, timer_ref: timer_ref, prev_time: now_time}}
   end
 
   def handle_other(_message, state), do: {:ok, state}

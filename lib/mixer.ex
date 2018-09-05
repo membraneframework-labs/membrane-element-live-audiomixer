@@ -1,11 +1,10 @@
 defmodule Membrane.Element.LiveAudioMixer.Source do
   use Membrane.Mixins.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
-  use Membrane.Helper
 
-  alias Membrane.{Buffer, Event}
+  alias Membrane.{Buffer, Event, Helper, Time}
   alias Membrane.Caps.Audio.Raw, as: Caps
-  alias Membrane.Time
+  alias Membrane.Element.LiveAudioMixer.Timer
   alias Membrane.Common.AudioMix
 
   def_options interval: [
@@ -50,6 +49,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def_known_source_pads source: {:always, :push, Caps}
   def_known_sink_pads sink: {:on_request, {:pull, demand_in: :bytes}, Caps}
 
+  @timer Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)
+
   @impl true
   def handle_init(options) do
     %{
@@ -60,18 +61,13 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     state = %{
       interval: interval,
-      demand: nil,
-      interval_start_time: nil,
-      expected_tick_duration: nil,
-      lost: 0,
-      start: 0,
-      ticks: 0,
-      sent: 0,
-
-      timer_ref: nil,
       delay: delay,
       caps: caps,
       sinks: %{},
+      demand: nil,
+      interval_start_time: nil,
+      expected_tick_duration: nil,
+      timer_ref: nil,
       playing: false
     }
 
@@ -87,7 +83,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     } = state
 
     interval_start_time = Time.monotonic_time()
-    timer_ref = interval |> Helper.Timer.send_after(:tick)
+    timer_ref = interval |> Timer.send_after(:tick)
     silence = (interval + delay) |> AudioMix.generate_silence(caps)
 
     new_state = %{
@@ -96,9 +92,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
         interval_start_time: interval_start_time,
         expected_tick_duration: interval,
         timer_ref: timer_ref,
-        playing: true,
-        start: interval_start_time,
-        ticks: 0
+        playing: true
     }
 
     actions =
@@ -117,8 +111,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       sinks: sinks
     } = state
 
-    # TODO: When Helper.Timer is updated, this line of code should be changed
-    timer_ref |> :timer.cancel()
+    timer_ref |> Timer.cancel_timer()
 
     sinks =
       sinks
@@ -156,7 +149,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     {{:ok, actions}, state}
   end
 
-  def handle_event(pad, %Event{type: :eos} = event, _context, state) do
+  def handle_event(pad, %Event{type: :eos}, _context, state) do
     state = state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
     {:ok, state}
   end
@@ -180,11 +173,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_other(:tick, %{playing: true} = state) do
-    IO.puts("TICK")
-    IO.puts("TICKS: #{state.ticks + 1}")
-    IO.puts("EXPECTED TICKS: #{(Time.monotonic_time() - state.start) / state.interval}")
-    IO.puts("SENT: #{state.sent / state.demand}")
-    IO.puts("LOST: #{state.lost}")
     %{
       interval: interval,
       demand: demand,
@@ -201,27 +189,16 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     timer_ref = new_expected_tick_duration |> Helper.Timer.send_after(:tick)
 
-    IO.puts(tick_duration)
-
     payloads =
       sinks
       |> Enum.map(fn {_pad, %{queue: queue}} ->
         if byte_size(queue) == demand do
-          IO.puts("NIE DUPSKO")
           queue
         else
-          IO.puts("DUPSKO: #{byte_size(queue)}")
           <<>>
         end
       end)
       |> Enum.filter(&(byte_size(&1) > 0))
-
-    lost =
-      if payloads == [] do
-        state.lost + 1
-      else
-        state.lost
-      end
 
     payloads =
       if payloads == [] do
@@ -229,6 +206,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       else
         payloads
       end
+
     payload = AudioMix.mix(payloads, caps)
 
     sinks =
@@ -247,10 +225,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
         expected_tick_duration: new_expected_tick_duration,
         demand: interval |> Caps.time_to_bytes(caps),
         interval_start_time: now_time,
-        timer_ref: timer_ref,
-        lost: lost,
-        ticks: state.ticks + 1,
-        sent: state.sent + byte_size(payload)
+        timer_ref: timer_ref
     }
 
     demands = new_state |> generate_demands

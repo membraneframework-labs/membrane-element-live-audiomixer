@@ -4,7 +4,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   alias Membrane.{Buffer, Event, Helper, Time}
   alias Membrane.Caps.Audio.Raw, as: Caps
-  alias Membrane.Element.LiveAudioMixer.Timer
   alias Membrane.Common.AudioMix
 
   def_options interval: [
@@ -59,12 +58,14 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       caps: caps
     } = options
 
+    IO.puts("#{inspect Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)}")
+    IO.puts("#{Mix.env()}.exs")
+
     state = %{
       interval: interval,
       delay: delay,
       caps: caps,
       sinks: %{},
-      demand: nil,
       interval_start_time: nil,
       expected_tick_duration: nil,
       timer_ref: nil,
@@ -83,13 +84,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     } = state
 
     interval_start_time = Time.monotonic_time()
-    timer_ref = interval |> Timer.send_after(:tick)
+    timer_ref = interval |> @timer.send_after(:tick)
     silence = (interval + delay) |> AudioMix.generate_silence(caps)
 
     new_state = %{
       state
-      | demand: interval |> Caps.time_to_bytes(caps),
-        interval_start_time: interval_start_time,
+      | interval_start_time: interval_start_time,
         expected_tick_duration: interval,
         timer_ref: timer_ref,
         playing: true
@@ -111,7 +111,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       sinks: sinks
     } = state
 
-    timer_ref |> Timer.cancel_timer()
+    timer_ref |> @timer.cancel_timer()
 
     sinks =
       sinks
@@ -133,14 +133,9 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_event(pad, %Event{type: :sos}, _context, state) do
-    %{
-      demand: demand,
-      playing: playing
-    } = state
-
     actions =
-      if playing == true do
-        [demand: {pad, :self, {:set_to, demand}}]
+      if state.playing == true do
+        [demand: {pad, :self, {:set_to, get_demand(state)}}]
       else
         []
       end
@@ -175,12 +170,13 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def handle_other(:tick, %{playing: true} = state) do
     %{
       interval: interval,
-      demand: demand,
       interval_start_time: interval_start_time,
       expected_tick_duration: expected_tick_duration,
       caps: caps,
       sinks: sinks
     } = state
+
+    demand = get_demand(state)
 
     now_time = Time.monotonic_time()
     tick_duration = now_time - interval_start_time
@@ -207,7 +203,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
         payloads
       end
 
-    payload = AudioMix.mix(payloads, caps)
+    payload = payloads |> AudioMix.mix(caps)
 
     sinks =
       state.sinks
@@ -223,7 +219,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       state
       | sinks: sinks,
         expected_tick_duration: new_expected_tick_duration,
-        demand: interval |> Caps.time_to_bytes(caps),
         interval_start_time: now_time,
         timer_ref: timer_ref
     }
@@ -237,14 +232,20 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def handle_other(_message, state), do: {:ok, state}
 
   defp generate_demands(state) do
-    %{
-      demand: demand,
-      sinks: sinks
-    } = state
+    demand = get_demand(state)
 
-    sinks
+    state.sinks
     |> Enum.map(fn {pad, _} ->
       {:demand, {pad, :self, {:set_to, demand}}}
     end)
+  end
+
+  defp get_demand(state) do
+    %{
+      interval: interval,
+      caps: caps
+    } = state
+
+    interval |> Caps.time_to_bytes(caps)
   end
 end

@@ -7,7 +7,8 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
       version: "0.1.0",
       elixir: "~> 1.6",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      mixer_timer: Membrane.Element.LiveAudioMixer.Timer
     ]
   end
 
@@ -23,7 +24,7 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
       {:membrane_caps_audio_raw, "~> 0.1"},
       {:membrane_loggers, "~> 0.1"},
       {:membrane_common_audiomix,
-       path: "/Users/vladyslav/Documents/repos/membrane_common_audiomix"},
+       path: "/Users/vladyslav/Documents/repos/membrane_common_audiomix"}
     ]
   end
 end

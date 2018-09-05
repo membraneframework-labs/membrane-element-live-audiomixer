@@ -50,5 +50,17 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "set playing to true" do
       assert {{:ok, _actions}, %{playing: true}} = @module.handle_play(@dummy_state)
     end
+
+    test "start a timer" do
+      assert {{:ok, _actions}, %{}} = @module.handle_play(@dummy_state)
+      assert_received({:send_after, @interval, :tick, _, _})
+    end
+
+    test "generate demands for all the sinks" do
+      {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
+      assert actions |> Enum.any?(&(match?({:demand, {:sink_1, :self, {:set_to, _demand}}}, &1)))
+      assert actions |> Enum.any?(&(match?({:demand, {:sink_2, :self, {:set_to, _demand}}}, &1)))
+      assert actions |> Enum.any?(&(match?({:demand, {:sink_3, :self, {:set_to, _demand}}}, &1)))
+    end
   end
 end

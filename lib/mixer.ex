@@ -58,7 +58,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       caps: caps
     } = options
 
-    IO.puts("#{inspect Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)}")
+    IO.puts("#{inspect(Application.get_env(:membrane_element_live_audiomixer, :mixer_timer))}")
     IO.puts("#{Mix.env()}.exs")
 
     state = %{

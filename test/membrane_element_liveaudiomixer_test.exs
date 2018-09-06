@@ -109,9 +109,11 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   test "handle_pad_removed should set eos to true for a given pad" do
     assert {:ok, %{sinks: sinks}} = @module.handle_pad_removed(:sink_1, :context, @dummy_state)
     assert sinks |> Map.to_list() |> length == 3
-    assert sinks |> Enum.all?(fn {pad, %{eos: eos}} ->
-      (pad == :sink_1) == eos
-    end)
+
+    assert sinks
+           |> Enum.all?(fn {pad, %{eos: eos}} ->
+             pad == :sink_1 == eos
+           end)
   end
 
   describe "handle_event should" do
@@ -122,15 +124,21 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     end
 
     test "set eos for the given pad on true (on Event{type: :eos})" do
-      assert {:ok, %{sinks: sinks}} = @module.handle_event(:sink_1, %Event{type: :eos}, [], @dummy_state)
+      assert {:ok, %{sinks: sinks}} =
+               @module.handle_event(:sink_1, %Event{type: :eos}, [], @dummy_state)
+
       assert sinks |> Map.to_list() |> length == 3
-      assert sinks |> Enum.all?(fn {pad, %{eos: eos}} ->
-        (pad == :sink_1) == eos
-      end)
+
+      assert sinks
+             |> Enum.all?(fn {pad, %{eos: eos}} ->
+               pad == :sink_1 == eos
+             end)
     end
 
     test "add an instance in sinks map (on Event{type: :sos})" do
-      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_event(:sink_4, %Event{type: :sos}, [], @dummy_state)
+      assert {{:ok, _actions}, %{sinks: sinks}} =
+               @module.handle_event(:sink_4, %Event{type: :sos}, [], @dummy_state)
+
       assert sinks |> Map.to_list() |> length == 4
       assert sinks |> Map.has_key?(:sink_4)
       assert %{queue: <<>>, eos: false} = sinks[:sink_4]
@@ -138,14 +146,19 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     test "generate the appropriate demand for a given pad" do
       sink = :sink_4
-      assert {{:ok, actions}, _state} = @module.handle_event(sink, %Event{type: :sos}, [], @dummy_state)
+
+      assert {{:ok, actions}, _state} =
+               @module.handle_event(sink, %Event{type: :sos}, [], @dummy_state)
+
       demand = @interval |> Caps.time_to_bytes(@caps)
       assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
     end
   end
 
   test "handle_process1 should append to the queue the payload of the buffer" do
-    assert {:ok, %{sinks: sinks}} = @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
+    assert {:ok, %{sinks: sinks}} =
+             @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
+
     assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = sinks[:sink_1]
     assert %{queue: <<3, 2, 1>>, eos: false} = sinks[:sink_2]
     assert %{queue: <<1, 2, 3>>, eos: false} = sinks[:sink_3]
@@ -160,7 +173,9 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     end
 
     test "do nothing if state.playing is false" do
-      assert {:ok, %{@dummy_state | playing: false}} == @module.handle_other(:tick, %{@dummy_state | playing: false})
+      assert {:ok, %{@dummy_state | playing: false}} ==
+               @module.handle_other(:tick, %{@dummy_state | playing: false})
+
       refute_received({:send_after, _time, _msg, _dest, _opts})
       refute_received({:calcel_timer, _timer_ref, _options})
     end
@@ -172,21 +187,30 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     end
 
     test "filter out pads with eos: true and clear queues for all the others sinks" do
-      state = @dummy_state |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
-        %{queue: queue, eos: true}
-      end)
-      state = state |> Helper.Map.update_in([:sinks, :sink_2], fn %{queue: queue, eos: false} ->
-        %{queue: queue, eos: true}
-      end)
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
+          %{queue: queue, eos: true}
+        end)
+
+      state =
+        state
+        |> Helper.Map.update_in([:sinks, :sink_2], fn %{queue: queue, eos: false} ->
+          %{queue: queue, eos: true}
+        end)
+
       assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
       assert %{queue: "", eos: false} = sinks[:sink_3]
       assert sinks |> Map.to_list() |> length == 1
     end
 
     test "generate demands" do
-      state = @dummy_state |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
-        %{queue: queue, eos: true}
-      end)
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
+          %{queue: queue, eos: true}
+        end)
+
       assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
       demand = @interval |> Caps.time_to_bytes(@caps)
       assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand}}}, &1))
@@ -195,28 +219,38 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     end
 
     test "mix payloads (test1, everything is fine)" do
-      state = 1..3 |> Enum.reduce(@dummy_state, fn id, state ->
-        sink = :"sink_#{id}"
-        state |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
-          %{queue: generate(<<id>>, @interval, @caps), eos: eos}
+      state =
+        1..3
+        |> Enum.reduce(@dummy_state, fn id, state ->
+          sink = :"sink_#{id}"
+
+          state
+          |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
+            %{queue: generate(<<id>>, @interval, @caps), eos: eos}
+          end)
         end)
-      end)
+
       assert {{:ok, actions}, %{}} = @module.handle_other(:tick, state)
       assert {:source, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<6>>, @interval, @caps)
     end
 
     test "mix payloads (test2, something is broken)" do
-      state = 1..3 |> Enum.reduce(@dummy_state, fn id, state ->
-        sink = :"sink_#{id}"
-        if id == 2 do
-          state
-        else
-          state |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
-            %{queue: generate(<<id>>, @interval, @caps), eos: eos}
-          end)
-        end
-      end)
+      state =
+        1..3
+        |> Enum.reduce(@dummy_state, fn id, state ->
+          sink = :"sink_#{id}"
+
+          if id == 2 do
+            state
+          else
+            state
+            |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
+              %{queue: generate(<<id>>, @interval, @caps), eos: eos}
+            end)
+          end
+        end)
+
       assert {{:ok, actions}, %{}} = @module.handle_other(:tick, state)
       assert {:source, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<4>>, @interval, @caps)

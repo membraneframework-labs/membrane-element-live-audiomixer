@@ -32,9 +32,9 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   @dummy_state %{
     @empty_state
     | sinks: %{
-        :sink_1 => %{queue: <<123>>, eos: false},
-        :sink_2 => %{queue: <<321>>, eos: false},
-        :sink_3 => %{queue: <<123>>, eos: false}
+        :sink_1 => %{queue: <<1, 2, 3>>, eos: false},
+        :sink_2 => %{queue: <<3, 2, 1>>, eos: false},
+        :sink_3 => %{queue: <<1, 2, 3>>, eos: false}
       },
       interval_start_time: 123,
       expected_tick_duration: @interval,
@@ -140,5 +140,13 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       demand = @interval |> Caps.time_to_bytes(@caps)
       assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
     end
+  end
+
+  test "handle_process1 should append to the queue the payload of the buffer" do
+    assert {:ok, %{sinks: sinks}} = @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
+    assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = sinks[:sink_1]
+    assert %{queue: <<3, 2, 1>>, eos: false} = sinks[:sink_2]
+    assert %{queue: <<1, 2, 3>>, eos: false} = sinks[:sink_3]
+    assert sinks |> Map.to_list() |> length == 3
   end
 end

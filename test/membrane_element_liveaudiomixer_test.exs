@@ -103,4 +103,12 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       assert sinks |> Map.to_list() |> length == 3
     end
   end
+
+  test "handle_pad_removed should set eos to true for a given pad" do
+    assert {:ok, %{sinks: sinks}} = @module.handle_pad_removed(:sink_1, :context, @dummy_state)
+    assert sinks |> Map.to_list() |> length == 3
+    assert sinks |> Enum.all?(fn {pad, %{eos: eos}} ->
+      (pad == :sink_1) == eos
+    end)
+  end
 end

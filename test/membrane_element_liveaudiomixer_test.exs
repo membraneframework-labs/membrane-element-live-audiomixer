@@ -1,8 +1,10 @@
 defmodule Membrane.Element.LiveAudioMixer.Test do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias Membrane.{Buffer, Event}
   alias Membrane.Time
   alias Membrane.Caps.Audio.Raw, as: Caps
+  alias Membrane.Common.AudioMix
 
   @module Membrane.Element.LiveAudioMixer.Source
 
@@ -30,9 +32,9 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   @dummy_state %{
     @empty_state
     | sinks: %{
-        :sink_1 => :dummy_sink_1,
-        :sink_2 => :dummy_sink_2,
-        :sink_3 => :dummy_sink_3
+        :sink_1 => %{queue: <<123>>, eos: false},
+        :sink_2 => %{queue: <<321>>, eos: false},
+        :sink_3 => %{queue: <<123>>, eos: false}
       },
       interval_start_time: 123,
       expected_tick_duration: @interval,
@@ -58,9 +60,47 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     test "generate demands for all the sinks" do
       {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
-      assert actions |> Enum.any?(&(match?({:demand, {:sink_1, :self, {:set_to, _demand}}}, &1)))
-      assert actions |> Enum.any?(&(match?({:demand, {:sink_2, :self, {:set_to, _demand}}}, &1)))
-      assert actions |> Enum.any?(&(match?({:demand, {:sink_3, :self, {:set_to, _demand}}}, &1)))
+
+      1..3
+      |> Enum.each(fn id ->
+        sink = :"sink_#{id}"
+        demand = @interval |> Caps.time_to_bytes(@caps)
+        assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
+      end)
+    end
+
+    test "generate the appropriate amount of silence" do
+      {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
+      silence = (@delay + @interval) |> AudioMix.generate_silence(@caps)
+      assert actions |> Enum.any?(&match?({:buffer, {:source, %Buffer{payload: ^silence}}}, &1))
+    end
+  end
+
+  describe "handle_prepare should" do
+    test "do nothing if previous playback state is not set to :playing" do
+      assert {:ok, @dummy_state} == @module.handle_prepare(:mock, @dummy_state)
+      refute_received({:send_after, _time, _msg, _dest, _opts})
+      refute_received({:calcel_timer, _timer_ref, _options})
+    end
+
+    test "set playing to false on :playing" do
+      assert {:ok, %{playing: false}} = @module.handle_prepare(:playing, @dummy_state)
+    end
+
+    test "cancel the timer and clear its reference on :playing" do
+      assert {:ok, %{timer_ref: nil}} = @module.handle_prepare(:playing, @dummy_state)
+      assert_received({:cancel_timer, :mtimer, _options})
+    end
+
+    test "clear queues of all the sinks" do
+      assert {:ok, %{sinks: sinks}} = @module.handle_prepare(:playing, @dummy_state)
+
+      assert sinks
+             |> Enum.all?(fn {_pad, %{queue: queue, eos: eos}} ->
+               queue == <<>> and eos == false
+             end)
+
+      assert sinks |> Map.to_list() |> length == 3
     end
   end
 end

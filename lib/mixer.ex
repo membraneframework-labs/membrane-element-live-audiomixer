@@ -58,9 +58,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       caps: caps
     } = options
 
-    IO.puts("#{inspect(Application.get_env(:membrane_element_live_audiomixer, :mixer_timer))}")
-    IO.puts("#{Mix.env()}.exs")
-
     state = %{
       interval: interval,
       delay: delay,
@@ -183,7 +180,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     time_diff = tick_duration - expected_tick_duration
     new_expected_tick_duration = interval - time_diff
 
-    timer_ref = new_expected_tick_duration |> Helper.Timer.send_after(:tick)
+    timer_ref = new_expected_tick_duration |> @timer.send_after(:tick)
 
     payloads =
       sinks
@@ -206,7 +203,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     payload = payloads |> AudioMix.mix(caps)
 
     sinks =
-      state.sinks
+      sinks
       |> Enum.map(fn {pad, %{eos: eos}} ->
         {pad, %{queue: <<>>, eos: eos}}
       end)

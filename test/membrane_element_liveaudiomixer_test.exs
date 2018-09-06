@@ -111,4 +111,34 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       (pad == :sink_1) == eos
     end)
   end
+
+  describe "handle_event should" do
+    test "do nothing if the event is not SOS nor EOS" do
+      assert {:ok, @dummy_state} == @module.handle_event(:sink_1, %Event{}, [], @dummy_state)
+      refute_received({:send_after, _time, _msg, _dest, _opts})
+      refute_received({:calcel_timer, _timer_ref, _options})
+    end
+
+    test "set eos for the given pad on true (on Event{type: :eos})" do
+      assert {:ok, %{sinks: sinks}} = @module.handle_event(:sink_1, %Event{type: :eos}, [], @dummy_state)
+      assert sinks |> Map.to_list() |> length == 3
+      assert sinks |> Enum.all?(fn {pad, %{eos: eos}} ->
+        (pad == :sink_1) == eos
+      end)
+    end
+
+    test "add an instance in sinks map (on Event{type: :sos})" do
+      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_event(:sink_4, %Event{type: :sos}, [], @dummy_state)
+      assert sinks |> Map.to_list() |> length == 4
+      assert sinks |> Map.has_key?(:sink_4)
+      assert %{queue: <<>>, eos: false} = sinks[:sink_4]
+    end
+
+    test "generate the appropriate demand for a given pad" do
+      sink = :sink_4
+      assert {{:ok, actions}, _state} = @module.handle_event(sink, %Event{type: :sos}, [], @dummy_state)
+      demand = @interval |> Caps.time_to_bytes(@caps)
+      assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
+    end
+  end
 end

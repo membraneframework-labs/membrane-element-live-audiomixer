@@ -64,7 +64,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       caps: caps,
       sinks: %{},
       interval_start_time: nil,
-      expected_tick_duration: nil,
+      ticks: 0,
       timer_ref: nil,
       playing: false
     }
@@ -82,12 +82,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     interval_start_time = Time.monotonic_time()
     timer_ref = interval |> @timer.send_after(:tick)
-    silence = (interval + delay) |> AudioMix.generate_silence(caps)
+    silence = (interval + delay) |> Caps.sound_of_silence(caps)
 
     new_state = %{
       state
       | interval_start_time: interval_start_time,
-        expected_tick_duration: interval,
+        ticks: 0,
         timer_ref: timer_ref,
         playing: true
     }
@@ -168,7 +168,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     %{
       interval: interval,
       interval_start_time: interval_start_time,
-      expected_tick_duration: expected_tick_duration,
+      ticks: ticks,
       caps: caps,
       sinks: sinks
     } = state
@@ -176,11 +176,9 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     demand = get_demand(state)
 
     now_time = Time.monotonic_time()
-    tick_duration = now_time - interval_start_time
-    time_diff = tick_duration - expected_tick_duration
-    new_expected_tick_duration = interval - time_diff
+    new_tick_duration = (ticks + 2) * interval + interval_start_time - now_time
 
-    timer_ref = new_expected_tick_duration |> @timer.send_after(:tick)
+    timer_ref = new_tick_duration |> @timer.send_after(:tick)
 
     payloads =
       sinks
@@ -195,7 +193,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     payloads =
       if payloads == [] do
-        [interval |> AudioMix.generate_silence(caps)]
+        [interval |> Caps.sound_of_silence(caps)]
       else
         payloads
       end
@@ -215,8 +213,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     new_state = %{
       state
       | sinks: sinks,
-        expected_tick_duration: new_expected_tick_duration,
-        interval_start_time: now_time,
+        ticks: ticks + 1,
         timer_ref: timer_ref
     }
 

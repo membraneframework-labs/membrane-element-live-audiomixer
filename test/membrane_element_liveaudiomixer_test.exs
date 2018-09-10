@@ -5,7 +5,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   alias Membrane.{Buffer, Event}
   alias Membrane.Time
   alias Membrane.Caps.Audio.Raw, as: Caps
-  alias Membrane.Common.AudioMix
 
   @module Membrane.Element.LiveAudioMixer.Source
 
@@ -25,7 +24,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     caps: @caps,
     sinks: %{},
     interval_start_time: nil,
-    expected_tick_duration: nil,
+    ticks: 0,
     timer_ref: nil,
     playing: false
   }
@@ -38,7 +37,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
         :sink_3 => %{queue: <<1, 2, 3>>, eos: false}
       },
       interval_start_time: 123,
-      expected_tick_duration: @interval,
       timer_ref: :mtimer,
       playing: true
   }
@@ -73,7 +71,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     test "generate the appropriate amount of silence" do
       {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
-      silence = (@delay + @interval) |> AudioMix.generate_silence(@caps)
+      silence = (@delay + @interval) |> Caps.sound_of_silence(@caps)
       assert actions |> Enum.any?(&match?({:buffer, {:source, %Buffer{payload: ^silence}}}, &1))
     end
   end
@@ -260,11 +258,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       assert {{:ok, actions}, %{}} = @module.handle_other(:tick, @dummy_state)
       assert {:source, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<0>>, @interval, @caps)
-    end
-
-    test "change interval_start_time" do
-      assert {{:ok, _actions}, state} = @module.handle_other(:tick, @dummy_state)
-      assert state.interval_start_time != @dummy_state.interval_start_time
     end
 
     defp generate(byte, interval, caps) do

@@ -71,7 +71,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     test "generate the appropriate amount of silence" do
       {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
-      silence = (@delay + @interval) |> Caps.sound_of_silence(@caps)
+      silence = @caps |> Caps.sound_of_silence(@interval + @delay)
       assert actions |> Enum.any?(&match?({:buffer, {:source, %Buffer{payload: ^silence}}}, &1))
     end
   end

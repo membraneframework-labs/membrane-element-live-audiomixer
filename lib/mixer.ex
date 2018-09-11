@@ -82,7 +82,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     interval_start_time = Time.monotonic_time()
     timer_ref = interval |> @timer.send_after(:tick)
-    silence = (interval + delay) |> Caps.sound_of_silence(caps)
+    silence = caps |> Caps.sound_of_silence(interval + delay)
 
     new_state = %{
       state
@@ -193,7 +193,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     payloads =
       if payloads == [] do
-        [interval |> Caps.sound_of_silence(caps)]
+        [caps |> Caps.sound_of_silence(interval)]
       else
         payloads
       end

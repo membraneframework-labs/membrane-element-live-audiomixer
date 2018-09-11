@@ -21,7 +21,8 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
   defp deps do
     [
       {:membrane_core, "~> 0.1"},
-      {:membrane_caps_audio_raw, "~> 0.1"},
+      {:membrane_caps_audio_raw,
+        path: "/Users/vladyslav/Documents/repos/membrane-caps-audio-raw", override: true},
       {:membrane_loggers, "~> 0.1"},
       {:membrane_common_audiomix,
        path: "/Users/vladyslav/Documents/repos/membrane_common_audiomix"}

@@ -1,10 +1,24 @@
 defmodule Membrane.Element.LiveAudioMixer.Source do
+  @moduledoc """
+  The module is used for mixing several streams from different sources.
+  Sources can be dynamically added and removed, it's ok. It listens to
+  the sources for `interval` of time and mixes received data after that.
+  If some of the sources don't provide enough data, that data will be discarded.
+  If none of the sources provides enough data, silence will be generated.
+
+  FIXME: it's possible that because of rounding errors we will send too much data
+  each `interval` of time (hello, `interval |> Caps.time_to_bytes(caps)``). It
+  should be fixed.
+  """
+
   use Membrane.Mixins.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
 
   alias Membrane.{Buffer, Event, Helper, Time}
   alias Membrane.Caps.Audio.Raw, as: Caps
   alias Membrane.Common.AudioMix
+
+  @timer Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)
 
   def_options interval: [
                 type: :integer,
@@ -48,8 +62,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def_known_source_pads source: {:always, :push, Caps}
   def_known_sink_pads sink: {:on_request, {:pull, demand_in: :bytes}, Caps}
 
-  @timer Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)
-
   @impl true
   def handle_init(options) do
     %{
@@ -63,8 +75,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       delay: delay,
       caps: caps,
       sinks: %{},
-      interval_start_time: nil,
-      ticks: 0,
+      start_playing_time: nil,
+      tick: 1,
       timer_ref: nil,
       playing: false
     }
@@ -80,14 +92,14 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       caps: caps
     } = state
 
-    interval_start_time = Time.monotonic_time()
-    timer_ref = interval |> @timer.send_after(:tick)
     silence = caps |> Caps.sound_of_silence(interval + delay)
+    start_playing_time = Time.monotonic_time()
+    timer_ref = interval |> @timer.send_after(:tick)
 
     new_state = %{
       state
-      | interval_start_time: interval_start_time,
-        ticks: 0,
+      | start_playing_time: start_playing_time,
+        tick: 1,
         timer_ref: timer_ref,
         playing: true
     }
@@ -112,8 +124,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     sinks =
       sinks
-      |> Enum.map(fn {pad, %{eos: eos}} ->
-        {pad, %{queue: <<>>, eos: eos}}
+      |> Enum.map(fn {pad, data} ->
+        {pad, %{data | queue: <<>>, skip: 0}}
       end)
       |> Map.new()
 
@@ -132,12 +144,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def handle_event(pad, %Event{type: :sos}, _context, state) do
     actions =
       if state.playing == true do
-        [demand: {pad, :self, {:set_to, get_demand(state)}}]
+        [demand: {pad, :self, {:set_to, get_default_demand(state)}}]
       else
         []
       end
 
-    state = state |> Helper.Map.put_in([:sinks, pad], %{queue: <<>>, eos: false})
+    state = state |> Helper.Map.put_in([:sinks, pad], %{queue: <<>>, eos: false, skip: 0})
     {{:ok, actions}, state}
   end
 
@@ -156,8 +168,10 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     state =
       state
-      |> Helper.Map.update_in([:sinks, pad], fn %{queue: queue, eos: eos} ->
-        %{queue: queue <> payload, eos: eos}
+      |> Helper.Map.update_in([:sinks, pad], fn %{queue: queue, skip: skip} = data ->
+        to_skip = min(skip, payload |> byte_size)
+        <<_skipped::binary-size(to_skip), payload::binary>> = payload
+        %{data | queue: queue <> payload, skip: skip - to_skip}
       end)
 
     {:ok, state}
@@ -166,21 +180,44 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   @impl true
   def handle_other(:tick, %{playing: true} = state) do
     %{
+      tick: tick,
+      sinks: sinks
+    } = state
+
+    payload = state |> mix_streams
+
+    now_time = Time.monotonic_time()
+    next_tick = get_next_tick(now_time, state)
+    timer_ref = (get_tick_time(next_tick, state) - now_time) |> @timer.send_after(:tick)
+
+    demand = state |> get_default_demand
+    sinks = sinks |> update_sinks(demand * (next_tick - tick))
+
+    new_state = %{
+      state
+      | sinks: sinks,
+        tick: next_tick,
+        timer_ref: timer_ref
+    }
+
+    demands = new_state |> generate_demands
+    actions = [buffer: {:source, %Buffer{payload: payload}}] ++ demands
+
+    {{:ok, actions}, new_state}
+  end
+
+  def handle_other(_message, state), do: {:ok, state}
+
+  defp mix_streams(state) do
+    %{
       interval: interval,
-      interval_start_time: interval_start_time,
-      ticks: ticks,
       caps: caps,
       sinks: sinks
     } = state
 
-    demand = get_demand(state)
+    demand = state |> get_default_demand
 
-    now_time = Time.monotonic_time()
-    new_tick_duration = (ticks + 2) * interval + interval_start_time - now_time
-
-    timer_ref = new_tick_duration |> @timer.send_after(:tick)
-
-    payloads =
+    streams =
       sinks
       |> Enum.map(fn {_pad, %{queue: queue}} ->
         if byte_size(queue) == demand do
@@ -191,55 +228,59 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       end)
       |> Enum.filter(&(byte_size(&1) > 0))
 
-    payloads =
-      if payloads == [] do
-        [caps |> Caps.sound_of_silence(interval)]
-      else
-        payloads
-      end
-
-    payload = payloads |> AudioMix.mix(caps)
-
-    sinks =
-      sinks
-      |> Enum.map(fn {pad, %{eos: eos}} ->
-        {pad, %{queue: <<>>, eos: eos}}
-      end)
-      |> Enum.filter(fn {_pad, %{eos: eos}} ->
-        eos == false
-      end)
-      |> Map.new()
-
-    new_state = %{
-      state
-      | sinks: sinks,
-        ticks: ticks + 1,
-        timer_ref: timer_ref
-    }
-
-    demands = new_state |> generate_demands
-    actions = demands ++ [buffer: {:source, %Buffer{payload: payload}}]
-
-    {{:ok, actions}, new_state}
+    if streams == [] do
+      [caps |> Caps.sound_of_silence(interval)]
+    else
+      streams
+    end
+    |> AudioMix.mix(caps)
   end
 
-  def handle_other(_message, state), do: {:ok, state}
+  defp update_sinks(sinks, skip_add) do
+    sinks
+    |> Enum.map(fn {pad, %{queue: queue, skip: skip} = data} ->
+      skip = skip + skip_add - byte_size(queue)
+      {pad, %{data | queue: <<>>, skip: skip}}
+    end)
+    |> Enum.filter(fn {_pad, %{eos: eos}} ->
+      eos == false
+    end)
+    |> Map.new()
+  end
 
   defp generate_demands(state) do
-    demand = get_demand(state)
+    demand = get_default_demand(state)
 
     state.sinks
-    |> Enum.map(fn {pad, _} ->
-      {:demand, {pad, :self, {:set_to, demand}}}
+    |> Enum.map(fn {pad, %{skip: skip}} ->
+      {:demand, {pad, :self, {:set_to, demand + skip}}}
     end)
   end
 
-  defp get_demand(state) do
+  defp get_default_demand(state) do
     %{
       interval: interval,
       caps: caps
     } = state
 
     interval |> Caps.time_to_bytes(caps)
+  end
+
+  defp get_next_tick(time, state) do
+    %{
+      interval: interval,
+      start_playing_time: start_playing_time
+    } = state
+
+    ((time - start_playing_time) / interval) |> Float.ceil() |> round
+  end
+
+  defp get_tick_time(tick, state) do
+    %{
+      interval: interval,
+      start_playing_time: start_playing_time
+    } = state
+
+    start_playing_time + tick * interval
   end
 end

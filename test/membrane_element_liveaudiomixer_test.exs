@@ -32,11 +32,11 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   @dummy_state %{
     @empty_state
     | sinks: %{
-        :sink_1 => %{queue: <<1, 2, 3>>, eos: false},
-        :sink_2 => %{queue: <<3, 2, 1>>, eos: false},
-        :sink_3 => %{queue: <<1, 2, 3>>, eos: false}
+        :sink_1 => %{queue: <<1, 2, 3>>, eos: false, skip: 0},
+        :sink_2 => %{queue: <<3, 2, 1>>, eos: false, skip: 0},
+        :sink_3 => %{queue: <<1, 2, 3>>, eos: false, skip: 0}
       },
-      interval_start_time: 123,
+      start_playing_time: 0,
       timer_ref: :mtimer,
       playing: true
   }

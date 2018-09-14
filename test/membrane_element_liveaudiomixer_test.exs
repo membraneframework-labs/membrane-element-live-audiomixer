@@ -233,7 +233,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       assert sinks |> Map.to_list() |> length == 1
     end
 
-    test "generate demands" do
+    test "generate demands (normal mixing speed)" do
       state =
         @dummy_state
         |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
@@ -250,6 +250,30 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
       demand_2 = 2 * demand - byte_size(queue_2)
       demand_3 = 2 * demand - byte_size(queue_3)
+
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))
+
+      assert sinks |> Map.to_list() |> length == 2
+    end
+
+    test "generate demands (slow mixing speed)" do
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
+          %{data | eos: true}
+        end)
+
+      mock(@time, [monotonic_time: 0], div(7 * @interval, 2))
+
+      assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      demand = @interval |> Caps.time_to_bytes(@caps)
+
+      %{queue: queue_2} = state.sinks[:sink_2]
+      %{queue: queue_3} = state.sinks[:sink_3]
+
+      demand_2 = 4 * demand - byte_size(queue_2)
+      demand_3 = 4 * demand - byte_size(queue_3)
 
       assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
       assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))

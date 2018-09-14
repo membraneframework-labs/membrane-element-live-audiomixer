@@ -274,7 +274,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       start_playing_time: start_playing_time
     } = state
 
-    ((time - start_playing_time) / interval + Time.nanosecond(1)) |> Float.ceil() |> round
+    div(time - start_playing_time, interval) + 1
   end
 
   defp get_tick_time(tick, state) do

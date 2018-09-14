@@ -142,7 +142,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
       assert sinks |> Map.to_list() |> length == 4
       assert sinks |> Map.has_key?(:sink_4)
-      assert %{queue: <<>>, eos: false} = sinks[:sink_4]
+      assert %{queue: <<>>, eos: false, skip: 0} = sinks[:sink_4]
     end
 
     test "generate the appropriate demand for a given pad" do
@@ -156,14 +156,42 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     end
   end
 
-  test "handle_process1 should append to the queue the payload of the buffer" do
-    assert {:ok, %{sinks: sinks}} =
-             @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
+  describe "handle_process1 should" do
+    test "append to the queue the payload of the buffer is skip is 0" do
+      assert {:ok, %{sinks: sinks}} =
+               @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
 
-    assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = sinks[:sink_1]
-    assert %{queue: <<3, 2, 1>>, eos: false} = sinks[:sink_2]
-    assert %{queue: <<1, 2, 3>>, eos: false} = sinks[:sink_3]
-    assert sinks |> Map.to_list() |> length == 3
+      assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = sinks[:sink_1]
+      assert %{queue: <<3, 2, 1>>, eos: false} = sinks[:sink_2]
+      assert %{queue: <<1, 2, 3>>, eos: false} = sinks[:sink_3]
+      assert sinks |> Map.to_list() |> length == 3
+    end
+
+    test "change skip is skip is too large" do
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn data ->
+          %{data | skip: 123}
+        end)
+
+      assert {:ok, %{sinks: sinks}} =
+               @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], state)
+
+      assert %{queue: <<1, 2, 3>>, eos: false, skip: 120} = sinks[:sink_1]
+    end
+
+    test "set skip to 0 and append the payload to the queue if byte_size(paylaod) >= skip" do
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn data ->
+          %{data | skip: 1}
+        end)
+
+      assert {:ok, %{sinks: sinks}} =
+               @module.handle_process1(:sink_1, %Buffer{payload: <<6, 7, 8>>}, [], state)
+
+      assert %{queue: <<1, 2, 3, 7, 8>>, eos: false, skip: 0} = sinks[:sink_1]
+    end
   end
 
   describe "handle_other should" do
@@ -212,17 +240,60 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
           %{data | eos: true}
         end)
 
-      mock @time, [monotonic_time: 0], @interval
+      mock(@time, [monotonic_time: 0], @interval)
 
       assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
       demand = @interval |> Caps.time_to_bytes(@caps)
+
       %{queue: queue_2} = state.sinks[:sink_2]
       %{queue: queue_3} = state.sinks[:sink_3]
+
       demand_2 = 2 * demand - byte_size(queue_2)
       demand_3 = 2 * demand - byte_size(queue_3)
+
       assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
       assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))
+
       assert sinks |> Map.to_list() |> length == 2
+    end
+
+    test "update sinks" do
+      state =
+        @dummy_state
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: _queue, eos: eos} = data ->
+          %{data | queue: generate(<<1>>, @interval, @caps), eos: eos}
+        end)
+
+      mock(@time, [monotonic_time: 0], @interval)
+
+      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      demand = @interval |> Caps.time_to_bytes(@caps)
+      %{queue: queue_2} = state.sinks[:sink_2]
+      %{queue: queue_3} = state.sinks[:sink_3]
+
+      skip_2 = demand - byte_size(queue_2)
+      skip_3 = demand - byte_size(queue_3)
+
+      assert %{skip: 0} = sinks[:sink_1]
+      assert %{skip: ^skip_2} = sinks[:sink_2]
+      assert %{skip: ^skip_3} = sinks[:sink_3]
+    end
+
+    test "update skips correctly (in case of slow mixing or timer problems)" do
+      state = @dummy_state
+
+      mock(@time, [monotonic_time: 0], div(5 * @interval, 2))
+
+      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      demand = @interval |> Caps.time_to_bytes(@caps)
+      %{queue: queue_2} = state.sinks[:sink_2]
+      %{queue: queue_3} = state.sinks[:sink_3]
+
+      skip_2 = 2 * demand - byte_size(queue_2)
+      skip_3 = 2 * demand - byte_size(queue_3)
+
+      assert %{skip: ^skip_2} = sinks[:sink_2]
+      assert %{skip: ^skip_3} = sinks[:sink_3]
     end
 
     test "mix payloads (test1, everything is fine)" do

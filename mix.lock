@@ -6,6 +6,7 @@
   "membrane_common_c": {:hex, :membrane_common_c, "0.1.0", "1ca2ca66b9244a8f08efa2d43ca56d149c91e63b198f386857ec1b25c91119ec", [:mix], [{:bundlex, "~> 0.1", [hex: :bundlex, repo: "hexpm", optional: false]}], "hexpm"},
   "membrane_core": {:hex, :membrane_core, "0.1.1", "720ddac3b65da8f04f60fcf7b65530a7955a6e697223da3f71b2d1b8169d8a3f", [:mix], [{:qex, "~> 0.3", [hex: :qex, repo: "hexpm", optional: false]}], "hexpm"},
   "membrane_loggers": {:hex, :membrane_loggers, "0.1.0", "76e944844a7c8cf45a2b5dd3ab6802a3c8f41a4efd823f63f4a69d9aac08230f", [:mix], [{:bundlex, "~> 0.1", [hex: :bundlex, repo: "hexpm", optional: false]}, {:membrane_common_c, "~> 0.1", [hex: :membrane_common_c, repo: "hexpm", optional: false]}, {:membrane_core, "~> 0.1", [hex: :membrane_core, repo: "hexpm", optional: false]}], "hexpm"},
+  "mockery": {:hex, :mockery, "2.2.0", "67304d5e1d247e698b171913689369bd23c94e437b4a8f32777c6f74b98cb36f", [:mix], [], "hexpm"},
   "porcelain": {:hex, :porcelain, "2.0.3", "2d77b17d1f21fed875b8c5ecba72a01533db2013bd2e5e62c6d286c029150fdc", [:mix], [], "hexpm"},
   "qex": {:hex, :qex, "0.5.0", "5a3a9becf67d4006377c4c247ffdaaa8ae5b3634a0caadb788dc24d6125068f4", [:mix], [], "hexpm"},
 }

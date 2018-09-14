@@ -25,7 +25,8 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
        path: "/Users/vladyslav/Documents/repos/membrane-caps-audio-raw", override: true},
       {:membrane_loggers, "~> 0.1"},
       {:membrane_common_audiomix,
-       path: "/Users/vladyslav/Documents/repos/membrane_common_audiomix"}
+       path: "/Users/vladyslav/Documents/repos/membrane_common_audiomix"},
+      {:mockery, "~> 2.2.0", runtime: false}
     ]
   end
 end

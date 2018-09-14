@@ -18,6 +18,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   alias Membrane.Caps.Audio.Raw, as: Caps
   alias Membrane.Common.AudioMix
 
+  import Mockery.Macro
+
   @timer Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)
 
   def_options interval: [
@@ -93,7 +95,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     } = state
 
     silence = caps |> Caps.sound_of_silence(interval + delay)
-    start_playing_time = Time.monotonic_time()
+    start_playing_time = mockable(Time).monotonic_time()
     timer_ref = interval |> @timer.send_after(:tick)
 
     new_state = %{
@@ -186,7 +188,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     payload = state |> mix_streams
 
-    now_time = Time.monotonic_time()
+    now_time = mockable(Time).monotonic_time()
     next_tick = get_next_tick(now_time, state)
     timer_ref = (get_tick_time(next_tick, state) - now_time) |> @timer.send_after(:tick)
 
@@ -272,7 +274,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       start_playing_time: start_playing_time
     } = state
 
-    ((time - start_playing_time) / interval) |> Float.ceil() |> round
+    ((time - start_playing_time) / interval + Time.nanosecond(1)) |> Float.ceil() |> round
   end
 
   defp get_tick_time(tick, state) do

@@ -6,7 +6,10 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   alias Membrane.Time
   alias Membrane.Caps.Audio.Raw, as: Caps
 
+  import Mockery
+
   @module Membrane.Element.LiveAudioMixer.Source
+  @time Membrane.Time
 
   @interval 1 |> Time.second()
   @delay 500 |> Time.milliseconds()
@@ -23,8 +26,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     delay: @delay,
     caps: @caps,
     sinks: %{},
-    interval_start_time: nil,
-    ticks: 0,
+    start_playing_time: nil,
+    tick: 1,
     timer_ref: nil,
     playing: false
   }
@@ -187,14 +190,14 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "filter out pads with eos: true and clear queues for all the others sinks" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
-          %{queue: queue, eos: true}
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
+          %{data | eos: true}
         end)
 
       state =
         state
-        |> Helper.Map.update_in([:sinks, :sink_2], fn %{queue: queue, eos: false} ->
-          %{queue: queue, eos: true}
+        |> Helper.Map.update_in([:sinks, :sink_2], fn %{eos: false} = data ->
+          %{data | eos: true}
         end)
 
       assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
@@ -205,14 +208,20 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "generate demands" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: queue, eos: false} ->
-          %{queue: queue, eos: true}
+        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
+          %{data | eos: true}
         end)
+
+      mock @time, [monotonic_time: 0], @interval
 
       assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
       demand = @interval |> Caps.time_to_bytes(@caps)
-      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand}}}, &1))
-      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand}}}, &1))
+      %{queue: queue_2} = state.sinks[:sink_2]
+      %{queue: queue_3} = state.sinks[:sink_3]
+      demand_2 = 2 * demand - byte_size(queue_2)
+      demand_3 = 2 * demand - byte_size(queue_3)
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))
       assert sinks |> Map.to_list() |> length == 2
     end
 
@@ -223,8 +232,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
           sink = :"sink_#{id}"
 
           state
-          |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
-            %{queue: generate(<<id>>, @interval, @caps), eos: eos}
+          |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} = data ->
+            %{data | queue: generate(<<id>>, @interval, @caps), eos: eos}
           end)
         end)
 
@@ -243,8 +252,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
             state
           else
             state
-            |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} ->
-              %{queue: generate(<<id>>, @interval, @caps), eos: eos}
+            |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} = data ->
+              %{data | queue: generate(<<id>>, @interval, @caps), eos: eos}
             end)
           end
         end)

@@ -11,7 +11,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   should be fixed.
   """
 
-  use Membrane.Mixins.Log, tags: :membrane_element_live_audiomixer
+  use Membrane.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
 
   alias Membrane.{Buffer, Event, Helper, Time}
@@ -20,7 +20,11 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   import Mockery.Macro
 
-  @timer Application.get_env(:membrane_element_live_audiomixer, :mixer_timer)
+  @timer Application.get_env(
+           :membrane_element_live_audiomixer,
+           :mixer_timer,
+           Membrane.Element.LiveAudioMixer.Timer
+         )
 
   def_options interval: [
                 type: :integer,
@@ -138,15 +142,25 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_pad_removed(pad, _context, state) do
-    state = state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
+    state =
+      if state |> Helper.Map.get_in([:sinks, pad]) != nil do
+        state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
+      else
+        state
+      end
+
     {:ok, state}
   end
 
   @impl true
   def handle_event(pad, %Event{type: :sos}, _context, state) do
+    now_time = mockable(Time).monotonic_time()
+    tick_time = now_time |> get_next_tick(state) |> get_tick_time(state)
+    demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
+
     actions =
       if state.playing == true do
-        [demand: {pad, :self, {:set_to, get_default_demand(state)}}]
+        [demand: {pad, :self, demand}]
       else
         []
       end
@@ -255,7 +269,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     state.sinks
     |> Enum.map(fn {pad, %{skip: skip}} ->
-      {:demand, {pad, :self, {:set_to, demand + skip}}}
+      {:demand, {pad, :self, demand + skip}}
     end)
   end
 

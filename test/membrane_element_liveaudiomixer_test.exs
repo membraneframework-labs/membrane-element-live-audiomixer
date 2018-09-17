@@ -68,7 +68,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       |> Enum.each(fn id ->
         sink = :"sink_#{id}"
         demand = @interval |> Caps.time_to_bytes(@caps)
-        assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
+        assert actions |> Enum.any?(&match?({:demand, {^sink, :self, ^demand}}, &1))
       end)
     end
 
@@ -104,6 +104,30 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
              end)
 
       assert sinks |> Map.to_list() |> length == 3
+    end
+  end
+
+  describe "handle_pad_remove should" do
+    test "eos to true for the given pad if the pad exists in sinks" do
+      assert {:ok, %{sinks: sinks}} = @module.handle_pad_removed(:sink_1, :context, @dummy_state)
+      assert sinks |> Map.to_list() |> length == 3
+
+      assert sinks
+             |> Enum.all?(fn {pad, %{eos: eos}} ->
+               pad == :sink_1 == eos
+             end)
+    end
+
+    test "do nothing if the given pad does not exists in sinks" do
+      assert {:ok, %{sinks: sinks}} =
+               @module.handle_pad_removed(:random_sink, :context, @dummy_state)
+
+      assert sinks |> Map.to_list() |> length == 3
+
+      assert sinks
+             |> Enum.all?(fn {_pad, %{eos: eos}} ->
+               eos == false
+             end)
     end
   end
 
@@ -148,11 +172,14 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "generate the appropriate demand for a given pad" do
       sink = :sink_4
 
+      time = div(@interval, 2)
+      mock(@time, [monotonic_time: 0], time)
+
       assert {{:ok, actions}, _state} =
                @module.handle_event(sink, %Event{type: :sos}, [], @dummy_state)
 
-      demand = @interval |> Caps.time_to_bytes(@caps)
-      assert actions |> Enum.any?(&match?({:demand, {^sink, :self, {:set_to, ^demand}}}, &1))
+      demand = time |> Caps.time_to_bytes(@caps)
+      assert actions |> Enum.any?(&match?({:demand, {^sink, :self, ^demand}}, &1))
     end
   end
 
@@ -251,8 +278,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       demand_2 = 2 * demand - byte_size(queue_2)
       demand_3 = 2 * demand - byte_size(queue_3)
 
-      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
-      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, ^demand_2}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, ^demand_3}}, &1))
 
       assert sinks |> Map.to_list() |> length == 2
     end
@@ -275,8 +302,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       demand_2 = 4 * demand - byte_size(queue_2)
       demand_3 = 4 * demand - byte_size(queue_3)
 
-      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, {:set_to, ^demand_2}}}, &1))
-      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, {:set_to, ^demand_3}}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, ^demand_2}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, ^demand_3}}, &1))
 
       assert sinks |> Map.to_list() |> length == 2
     end

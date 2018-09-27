@@ -11,7 +11,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   should be fixed.
   """
 
-  use Membrane.Log, tags: :membrane_element_live_audiomixer
+  use Membrane.Mixins.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
 
   alias Membrane.{Buffer, Event, Helper, Time}
@@ -244,12 +244,13 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       end)
       |> Enum.filter(&(byte_size(&1) > 0))
 
+    IO.inspect caps
     if streams == [] do
       [caps |> Caps.sound_of_silence(interval)]
     else
       streams
     end
-    |> AudioMix.mix(caps)
+    |> AudioMix.Native.mix_wrapper(caps)
   end
 
   defp update_sinks(sinks, skip_add) do

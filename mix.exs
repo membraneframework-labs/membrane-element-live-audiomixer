@@ -20,9 +20,7 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
   defp deps do
     [
       {:membrane_core,
-       git: "git@github.com:membraneframework/membrane-core.git",
-       branch: "fix/dynamic_pads",
-       override: true},
+       git: "git@github.com:membraneframework/membrane-core.git"},
       {:membrane_caps_audio_raw,
        path: "/Users/vladyslav/Documents/repos/membrane-caps-audio-raw", override: true},
       {:membrane_loggers, "~> 0.1"},

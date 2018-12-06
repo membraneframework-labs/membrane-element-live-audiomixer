@@ -11,10 +11,10 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   should be fixed.
   """
 
-  use Membrane.Mixins.Log, tags: :membrane_element_live_audiomixer
+  use Membrane.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
 
-  alias Membrane.{Buffer, Event, Helper, Time}
+  alias Membrane.{Buffer, Event, Time}
   alias Membrane.Caps.Audio.Raw, as: Caps
   alias Membrane.Common.AudioMix
 
@@ -65,33 +65,27 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
                 """
               ]
 
-  def_known_source_pads source: {:always, :push, Caps}
-  def_known_sink_pads sink: {:on_request, {:pull, demand_in: :bytes}, Caps}
+  def_output_pads output: [mode: :push, caps: Caps]
+  def_input_pads input: [availability: :on_request, mode: :pull, demand_unit: :bytes, caps: Caps]
 
   @impl true
   def handle_init(options) do
-    %{
-      interval: interval,
-      delay: delay,
-      caps: caps
-    } = options
-
-    state = %{
-      interval: interval,
-      delay: delay,
-      caps: caps,
-      sinks: %{},
-      start_playing_time: nil,
-      tick: 1,
-      timer_ref: nil,
-      playing: false
-    }
+    state =
+      options
+      |> Map.from_struct()
+      |> Map.merge(%{
+        sinks: %{},
+        start_playing_time: nil,
+        tick: 1,
+        timer_ref: nil,
+        playing: false
+      })
 
     {:ok, state}
   end
 
   @impl true
-  def handle_play(state) do
+  def handle_prepared_to_playing(_ctx, state) do
     %{
       interval: interval,
       delay: delay,
@@ -113,14 +107,14 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     actions =
       generate_demands(new_state) ++
         [
-          buffer: {:source, %Buffer{payload: silence}}
+          buffer: {:output, %Buffer{payload: silence}}
         ]
 
     {{:ok, actions}, new_state}
   end
 
   @impl true
-  def handle_prepare(:playing, state) do
+  def handle_playing_to_prepared(_ctx, state) do
     %{
       timer_ref: timer_ref,
       sinks: sinks
@@ -138,13 +132,11 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     {:ok, %{state | playing: false, timer_ref: nil, sinks: sinks}}
   end
 
-  def handle_prepare(_previous_playback_state, state), do: {:ok, state}
-
   @impl true
   def handle_pad_removed(pad, _context, state) do
     state =
-      if state |> Helper.Map.get_in([:sinks, pad]) != nil do
-        state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
+      if state |> Bunch.Access.get_in([:sinks, pad]) != nil do
+        state |> Bunch.Access.update_in([:sinks, pad], &%{&1 | eos: true})
       else
         state
       end
@@ -153,24 +145,24 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   end
 
   @impl true
-  def handle_event(pad, %Event{type: :sos}, _context, state) do
+  def handle_event(pad, %Event.StartOfStream{}, _context, state) do
     now_time = mockable(Time).monotonic_time()
     tick_time = now_time |> get_next_tick(state) |> get_tick_time(state)
     demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
 
     actions =
       if state.playing == true do
-        [demand: {pad, :self, demand}]
+        [demand: {pad, demand}]
       else
         []
       end
 
-    state = state |> Helper.Map.put_in([:sinks, pad], %{queue: <<>>, eos: false, skip: 0})
+    state = state |> Bunch.Access.put_in([:sinks, pad], %{queue: <<>>, eos: false, skip: 0})
     {{:ok, actions}, state}
   end
 
-  def handle_event(pad, %Event{type: :eos}, _context, state) do
-    state = state |> Helper.Map.update_in([:sinks, pad], &%{&1 | eos: true})
+  def handle_event(pad, %Event.EndOfStream{}, _context, state) do
+    state = state |> Bunch.Access.update_in([:sinks, pad], &%{&1 | eos: true})
     {:ok, state}
   end
 
@@ -179,12 +171,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   end
 
   @impl true
-  def handle_process1(pad, buffer, _context, state) do
+  def handle_process(pad, buffer, _context, state) do
     %Buffer{payload: payload} = buffer
 
     state =
       state
-      |> Helper.Map.update_in([:sinks, pad], fn %{queue: queue, skip: skip} = data ->
+      |> Bunch.Access.update_in([:sinks, pad], fn %{queue: queue, skip: skip} = data ->
         to_skip = min(skip, payload |> byte_size)
         <<_skipped::binary-size(to_skip), payload::binary>> = payload
         %{data | queue: queue <> payload, skip: skip - to_skip}
@@ -194,7 +186,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   end
 
   @impl true
-  def handle_other(:tick, %{playing: true} = state) do
+  def handle_other(:tick, _ctx, %{playing: true} = state) do
     %{
       tick: tick,
       sinks: sinks
@@ -217,7 +209,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     }
 
     demands = new_state |> generate_demands
-    actions = [buffer: {:source, %Buffer{payload: payload}}] ++ demands
+    actions = [{:buffer, {:output, %Buffer{payload: payload}}} | demands]
 
     {{:ok, actions}, new_state}
   end
@@ -244,7 +236,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       end)
       |> Enum.filter(&(byte_size(&1) > 0))
 
-    IO.inspect caps
+    IO.inspect(caps)
+
     if streams == [] do
       [caps |> Caps.sound_of_silence(interval)]
     else
@@ -270,7 +263,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     state.sinks
     |> Enum.map(fn {pad, %{skip: skip}} ->
-      {:demand, {pad, :self, demand + skip}}
+      {:demand, {pad, demand + skip}}
     end)
   end
 

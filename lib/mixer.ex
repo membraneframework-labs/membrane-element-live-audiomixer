@@ -74,7 +74,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       options
       |> Map.from_struct()
       |> Map.merge(%{
-        sinks: %{},
+        outputs: %{},
         start_playing_time: nil,
         tick: 1,
         timer_ref: nil,
@@ -117,26 +117,26 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def handle_playing_to_prepared(_ctx, state) do
     %{
       timer_ref: timer_ref,
-      sinks: sinks
+      outputs: outputs
     } = state
 
     timer_ref |> @timer.cancel_timer()
 
-    sinks =
-      sinks
+    outputs =
+      outputs
       |> Enum.map(fn {pad, data} ->
         {pad, %{data | queue: <<>>, skip: 0}}
       end)
       |> Map.new()
 
-    {:ok, %{state | playing: false, timer_ref: nil, sinks: sinks}}
+    {:ok, %{state | playing: false, timer_ref: nil, outputs: outputs}}
   end
 
   @impl true
   def handle_pad_removed(pad, _context, state) do
     state =
-      if state |> Bunch.Access.get_in([:sinks, pad]) != nil do
-        state |> Bunch.Access.update_in([:sinks, pad], &%{&1 | eos: true})
+      if state |> Bunch.Access.get_in([:outputs, pad]) != nil do
+        state |> Bunch.Access.update_in([:outputs, pad], &%{&1 | eos: true})
       else
         state
       end
@@ -157,12 +157,12 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
         []
       end
 
-    state = state |> Bunch.Access.put_in([:sinks, pad], %{queue: <<>>, eos: false, skip: 0})
+    state = state |> Bunch.Access.put_in([:outputs, pad], %{queue: <<>>, eos: false, skip: 0})
     {{:ok, actions}, state}
   end
 
   def handle_event(pad, %Event.EndOfStream{}, _context, state) do
-    state = state |> Bunch.Access.update_in([:sinks, pad], &%{&1 | eos: true})
+    state = state |> Bunch.Access.update_in([:outputs, pad], &%{&1 | eos: true})
     {:ok, state}
   end
 
@@ -176,7 +176,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     state =
       state
-      |> Bunch.Access.update_in([:sinks, pad], fn %{queue: queue, skip: skip} = data ->
+      |> Bunch.Access.update_in([:outputs, pad], fn %{queue: queue, skip: skip} = data ->
         to_skip = min(skip, payload |> byte_size)
         <<_skipped::binary-size(to_skip), payload::binary>> = payload
         %{data | queue: queue <> payload, skip: skip - to_skip}
@@ -189,7 +189,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   def handle_other(:tick, _ctx, %{playing: true} = state) do
     %{
       tick: tick,
-      sinks: sinks
+      outputs: outputs
     } = state
 
     payload = state |> mix_streams
@@ -199,11 +199,11 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     timer_ref = (get_tick_time(next_tick, state) - now_time) |> @timer.send_after(:tick)
 
     demand = state |> get_default_demand
-    sinks = sinks |> update_sinks(demand * (next_tick - tick))
+    outputs = outputs |> update_outputs(demand * (next_tick - tick))
 
     new_state = %{
       state
-      | sinks: sinks,
+      | outputs: outputs,
         tick: next_tick,
         timer_ref: timer_ref
     }
@@ -220,13 +220,13 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     %{
       interval: interval,
       caps: caps,
-      sinks: sinks
+      outputs: outputs
     } = state
 
     demand = state |> get_default_demand
 
     streams =
-      sinks
+      outputs
       |> Enum.map(fn {_pad, %{queue: queue}} ->
         if byte_size(queue) == demand do
           queue
@@ -236,8 +236,6 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       end)
       |> Enum.filter(&(byte_size(&1) > 0))
 
-    IO.inspect(caps)
-
     if streams == [] do
       [caps |> Caps.sound_of_silence(interval)]
     else
@@ -246,8 +244,8 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     |> AudioMix.mix_streams(caps)
   end
 
-  defp update_sinks(sinks, skip_add) do
-    sinks
+  defp update_outputs(outputs, skip_add) do
+    outputs
     |> Enum.map(fn {pad, %{queue: queue, skip: skip} = data} ->
       skip = skip + skip_add - byte_size(queue)
       {pad, %{data | queue: <<>>, skip: skip}}
@@ -261,7 +259,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
   defp generate_demands(state) do
     demand = get_default_demand(state)
 
-    state.sinks
+    state.outputs
     |> Enum.map(fn {pad, %{skip: skip}} ->
       {:demand, {pad, demand + skip}}
     end)

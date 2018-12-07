@@ -243,7 +243,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     else
       streams
     end
-    |> AudioMix.Native.mix_wrapper(caps)
+    |> AudioMix.mix_streams(caps)
   end
 
   defp update_sinks(sinks, skip_add) do

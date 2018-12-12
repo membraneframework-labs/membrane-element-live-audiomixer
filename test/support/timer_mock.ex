@@ -1,4 +1,6 @@
 defmodule TimerMock do
+  @moduledoc false
+
   @enforce_keys [:timer_ref]
   defstruct [:timer_ref]
 

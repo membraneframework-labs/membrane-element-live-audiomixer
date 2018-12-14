@@ -21,12 +21,12 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
 
   defp deps do
     [
-      {:membrane_core, "~> 0.2.0"},
+      {:ex_doc, "~> 0.19"},
+      {:membrane_core, "~> 0.2.0", github: "membraneframework/membrane-core", override: true},
       {:membrane_caps_audio_raw, "~> 0.1.3"},
       {:membrane_loggers, "~> 0.2"},
-      {:membrane_common_audiomix,
-       github: "membraneframework/membrane-common-audiomix", branch: "mixer-nif"},
-      {:bunch, "~> 0.1"},
+      {:membrane_common_audiomix, github: "membraneframework/membrane-common-audiomix"},
+      {:bunch, "~> 0.1.2"},
       {:mockery, "~> 2.2.0", runtime: false}
     ]
   end

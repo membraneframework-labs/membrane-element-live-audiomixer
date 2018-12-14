@@ -1,23 +1,28 @@
 defmodule Membrane.Element.LiveAudioMixer.Test do
   use ExUnit.Case, async: false
+  use Mockery
 
-  alias Membrane.Helper
+  alias Bunch
   alias Membrane.{Buffer, Event}
   alias Membrane.Time
   alias Membrane.Caps.Audio.Raw, as: Caps
+  alias Membrane.Element.CallbackContext, as: Ctx
+  alias Membrane.Element.LiveAudioMixer.Timer
 
-  import Mockery
-
-  @module Membrane.Element.LiveAudioMixer.Source
+  @module Membrane.Element.LiveAudioMixer
   @time Membrane.Time
 
-  @interval 1 |> Time.second()
-  @delay 500 |> Time.milliseconds()
+  @interval_ms 200
+  @interval @interval_ms |> Time.milliseconds()
+
+  @delay_ms 100
+  @delay @delay_ms |> Time.milliseconds()
+
   @caps %Caps{sample_rate: 48_000, format: :s16le, channels: 2}
 
-  @default_options %{
-    interval: @interval,
-    delay: @delay,
+  @default_options %Membrane.Element.LiveAudioMixer{
+    interval: @interval_ms,
+    delay: @delay_ms,
     caps: @caps
   }
 
@@ -25,106 +30,98 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     interval: @interval,
     delay: @delay,
     caps: @caps,
-    sinks: %{},
+    outputs: %{},
     start_playing_time: nil,
     tick: 1,
-    timer_ref: nil,
-    playing: false
+    timer_ref: nil
   }
 
   @dummy_state %{
     @empty_state
-    | sinks: %{
+    | outputs: %{
         :sink_1 => %{queue: <<1, 2, 3>>, eos: false, skip: 0},
         :sink_2 => %{queue: <<3, 2, 1>>, eos: false, skip: 0},
         :sink_3 => %{queue: <<1, 2, 3>>, eos: false, skip: 0}
       },
       start_playing_time: 0,
-      timer_ref: :mtimer,
-      playing: true
+      timer_ref: :mtimer
   }
 
   test "handle_init/1 should create an empty state" do
     assert {:ok, state} = @module.handle_init(@default_options)
-    assert @empty_state = state
-    assert state.playing == false
+    assert @empty_state == state
   end
 
-  describe "handle_play should" do
-    test "set playing to true" do
-      assert {{:ok, _actions}, %{playing: true}} = @module.handle_play(@dummy_state)
-    end
-
+  describe "handle_prepared_to_playing should" do
     test "start a timer" do
-      assert {{:ok, _actions}, %{timer_ref: timer_ref}} = @module.handle_play(@dummy_state)
-      assert_received({:send_after, @interval, :tick, _, _})
-      assert timer_ref != nil
+      mock(Timer, :send_after, :mtimer)
+
+      assert {{:ok, _actions}, %{timer_ref: timer_ref}} =
+               @module.handle_prepared_to_playing(%{}, @dummy_state)
+
+      interval = @interval
+      assert_called(Timer, :send_after, [^interval, :tick])
+      assert timer_ref == :mtimer
     end
 
-    test "generate demands for all the sinks" do
-      {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
+    test "generate demands for all the outputs" do
+      {{:ok, actions}, _state} = @module.handle_prepared_to_playing(%{}, @dummy_state)
 
       1..3
       |> Enum.each(fn id ->
         sink = :"sink_#{id}"
         demand = @interval |> Caps.time_to_bytes(@caps)
-        assert actions |> Enum.any?(&match?({:demand, {^sink, :self, ^demand}}, &1))
+        assert actions |> Enum.any?(&match?({:demand, {^sink, ^demand}}, &1))
       end)
     end
 
     test "generate the appropriate amount of silence" do
-      {{:ok, actions}, _state} = @module.handle_play(@dummy_state)
+      {{:ok, actions}, _state} = @module.handle_prepared_to_playing(%{}, @dummy_state)
       silence = @caps |> Caps.sound_of_silence(@interval + @delay)
-      assert actions |> Enum.any?(&match?({:buffer, {:source, %Buffer{payload: ^silence}}}, &1))
+      assert actions |> Enum.any?(&match?({:buffer, {:output, %Buffer{payload: ^silence}}}, &1))
     end
   end
 
-  describe "handle_prepare should" do
-    test "do nothing if previous playback state is not set to :playing" do
-      assert {:ok, @dummy_state} == @module.handle_prepare(:mock, @dummy_state)
-      refute_received({:send_after, _time, _msg, _dest, _opts})
-      refute_received({:calcel_timer, _timer_ref, _options})
-    end
-
-    test "set playing to false on :playing" do
-      assert {:ok, %{playing: false}} = @module.handle_prepare(:playing, @dummy_state)
-    end
-
+  describe "handle_playing_to_prepared should" do
     test "cancel the timer and clear its reference on :playing" do
-      assert {:ok, %{timer_ref: nil}} = @module.handle_prepare(:playing, @dummy_state)
-      assert_received({:cancel_timer, :mtimer, _options})
+      mock(Timer, :cancel_timer, :ok)
+      assert {:ok, %{timer_ref: nil}} = @module.handle_playing_to_prepared(%{}, @dummy_state)
+      assert_called(Timer, :cancel_timer, [:mtimer])
     end
 
-    test "clear queues of all the sinks" do
-      assert {:ok, %{sinks: sinks}} = @module.handle_prepare(:playing, @dummy_state)
+    test "clear queues of all the outputs" do
+      mock(Timer, :cancel_timer, :ok)
+      assert {:ok, %{outputs: outputs}} = @module.handle_playing_to_prepared(%{}, @dummy_state)
 
-      assert sinks
+      assert outputs
              |> Enum.all?(fn {_pad, %{queue: queue, eos: eos}} ->
                queue == <<>> and eos == false
              end)
 
-      assert sinks |> Map.to_list() |> length == 3
+      assert outputs |> Map.to_list() |> length == 3
     end
   end
 
   describe "handle_pad_remove should" do
-    test "eos to true for the given pad if the pad exists in sinks" do
-      assert {:ok, %{sinks: sinks}} = @module.handle_pad_removed(:sink_1, :context, @dummy_state)
-      assert sinks |> Map.to_list() |> length == 3
+    test "eos to true for the given pad if the pad exists in outputs" do
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_pad_removed(:sink_1, :context, @dummy_state)
 
-      assert sinks
+      assert outputs |> Map.to_list() |> length == 3
+
+      assert outputs
              |> Enum.all?(fn {pad, %{eos: eos}} ->
                pad == :sink_1 == eos
              end)
     end
 
-    test "do nothing if the given pad does not exists in sinks" do
-      assert {:ok, %{sinks: sinks}} =
+    test "do nothing if the given pad does not exists in outputs" do
+      assert {:ok, %{outputs: outputs}} =
                @module.handle_pad_removed(:random_sink, :context, @dummy_state)
 
-      assert sinks |> Map.to_list() |> length == 3
+      assert outputs |> Map.to_list() |> length == 3
 
-      assert sinks
+      assert outputs
              |> Enum.all?(fn {_pad, %{eos: eos}} ->
                eos == false
              end)
@@ -132,202 +129,220 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   end
 
   test "handle_pad_removed should set eos to true for a given pad" do
-    assert {:ok, %{sinks: sinks}} = @module.handle_pad_removed(:sink_1, :context, @dummy_state)
-    assert sinks |> Map.to_list() |> length == 3
+    assert {:ok, %{outputs: outputs}} =
+             @module.handle_pad_removed(:sink_1, :context, @dummy_state)
 
-    assert sinks
+    assert outputs |> Map.to_list() |> length == 3
+
+    assert outputs
            |> Enum.all?(fn {pad, %{eos: eos}} ->
              pad == :sink_1 == eos
            end)
   end
 
+  @event_ctx %Ctx.Event{
+    pads: %{},
+    playback_state: :playing
+  }
+
   describe "handle_event should" do
     test "do nothing if the event is not SOS nor EOS" do
-      assert {:ok, @dummy_state} == @module.handle_event(:sink_1, %Event{}, [], @dummy_state)
-      refute_received({:send_after, _time, _msg, _dest, _opts})
-      refute_received({:calcel_timer, _timer_ref, _options})
+      assert {:ok, @dummy_state} =
+               @module.handle_event(:sink_1, %Event.Underrun{}, @event_ctx, @dummy_state)
+
+      refute_called(Timer, :send_after)
+      refute_called(Timer, :cancel_timer)
     end
 
-    test "set eos for the given pad on true (on Event{type: :eos})" do
-      assert {:ok, %{sinks: sinks}} =
-               @module.handle_event(:sink_1, %Event{type: :eos}, [], @dummy_state)
+    test "set eos for the given pad on true (on EndOfStream event)" do
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_event(:sink_1, %Event.EndOfStream{}, @event_ctx, @dummy_state)
 
-      assert sinks |> Map.to_list() |> length == 3
+      assert outputs |> Map.to_list() |> length == 3
 
-      assert sinks
-             |> Enum.all?(fn {pad, %{eos: eos}} ->
-               pad == :sink_1 == eos
+      assert {[sink_1: %{eos: true}], not_eos} =
+               Enum.split_with(outputs, fn {pad, _} -> pad == :sink_1 end)
+
+      assert not_eos
+             |> Enum.all?(fn {_, %{eos: eos}} ->
+               eos == false
              end)
     end
 
-    test "add an instance in sinks map (on Event{type: :sos})" do
-      assert {{:ok, _actions}, %{sinks: sinks}} =
-               @module.handle_event(:sink_4, %Event{type: :sos}, [], @dummy_state)
+    test "add an instance in outputs map (on StartOfStream event)" do
+      assert {{:ok, _actions}, %{outputs: outputs}} =
+               @module.handle_event(:sink_4, %Event.StartOfStream{}, @event_ctx, @dummy_state)
 
-      assert sinks |> Map.to_list() |> length == 4
-      assert sinks |> Map.has_key?(:sink_4)
-      assert %{queue: <<>>, eos: false, skip: 0} = sinks[:sink_4]
+      assert outputs |> Map.to_list() |> length == 4
+      assert outputs |> Map.has_key?(:sink_4)
+      assert %{queue: <<>>, eos: false, skip: 0} = outputs[:sink_4]
     end
 
-    test "generate the appropriate demand for a given pad" do
+    test "generate the appropriate demand for a given pad (on StartOfStream event)" do
       sink = :sink_4
 
       time = div(@interval, 2)
       mock(@time, [monotonic_time: 0], time)
 
       assert {{:ok, actions}, _state} =
-               @module.handle_event(sink, %Event{type: :sos}, [], @dummy_state)
+               @module.handle_event(sink, %Event.StartOfStream{}, @event_ctx, @dummy_state)
 
       demand = time |> Caps.time_to_bytes(@caps)
-      assert actions |> Enum.any?(&match?({:demand, {^sink, :self, ^demand}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {^sink, ^demand}}, &1))
     end
   end
 
-  describe "handle_process1 should" do
+  describe "handle_process should" do
     test "append to the queue the payload of the buffer is skip is 0" do
-      assert {:ok, %{sinks: sinks}} =
-               @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_process(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], @dummy_state)
 
-      assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = sinks[:sink_1]
-      assert %{queue: <<3, 2, 1>>, eos: false} = sinks[:sink_2]
-      assert %{queue: <<1, 2, 3>>, eos: false} = sinks[:sink_3]
-      assert sinks |> Map.to_list() |> length == 3
+      assert %{queue: <<1, 2, 3, 5, 5, 5>>, eos: false} = outputs[:sink_1]
+      assert %{queue: <<3, 2, 1>>, eos: false} = outputs[:sink_2]
+      assert %{queue: <<1, 2, 3>>, eos: false} = outputs[:sink_3]
+      assert outputs |> Map.to_list() |> length == 3
     end
 
     test "change skip is skip is too large" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn data ->
+        |> Bunch.Access.update_in([:outputs, :sink_1], fn data ->
           %{data | skip: 123}
         end)
 
-      assert {:ok, %{sinks: sinks}} =
-               @module.handle_process1(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], state)
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_process(:sink_1, %Buffer{payload: <<5, 5, 5>>}, [], state)
 
-      assert %{queue: <<1, 2, 3>>, eos: false, skip: 120} = sinks[:sink_1]
+      assert %{queue: <<1, 2, 3>>, eos: false, skip: 120} = outputs[:sink_1]
     end
 
     test "set skip to 0 and append the payload to the queue if byte_size(paylaod) >= skip" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn data ->
+        |> Bunch.Access.update_in([:outputs, :sink_1], fn data ->
           %{data | skip: 1}
         end)
 
-      assert {:ok, %{sinks: sinks}} =
-               @module.handle_process1(:sink_1, %Buffer{payload: <<6, 7, 8>>}, [], state)
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_process(:sink_1, %Buffer{payload: <<6, 7, 8>>}, [], state)
 
-      assert %{queue: <<1, 2, 3, 7, 8>>, eos: false, skip: 0} = sinks[:sink_1]
+      assert %{queue: <<1, 2, 3, 7, 8>>, eos: false, skip: 0} = outputs[:sink_1]
     end
   end
 
+  @other_ctx %Ctx.Other{
+    pads: %{},
+    playback_state: :playing
+  }
+
   describe "handle_other should" do
     test "do nothing if it gets something different than :tick" do
-      assert {:ok, @dummy_state} == @module.handle_other(:not_a_tick, @dummy_state)
-      refute_received({:send_after, _time, _msg, _dest, _opts})
-      refute_received({:calcel_timer, _timer_ref, _options})
+      assert {:ok, @dummy_state} == @module.handle_other(:not_a_tick, @other_ctx, @dummy_state)
+      refute_called(Timer, :send_after)
+      refute_called(Timer, :cancel_timer)
     end
 
-    test "do nothing if state.playing is false" do
-      assert {:ok, %{@dummy_state | playing: false}} ==
-               @module.handle_other(:tick, %{@dummy_state | playing: false})
+    test "do nothing if playback_state is false" do
+      ctx = %{@other_ctx | playback_state: :prepared}
+      assert {:ok, @dummy_state} == @module.handle_other(:tick, ctx, @dummy_state)
 
-      refute_received({:send_after, _time, _msg, _dest, _opts})
-      refute_received({:calcel_timer, _timer_ref, _options})
+      refute_called(Timer, :send_after)
+      refute_called(Timer, :cancel_timer)
     end
 
     test "start a timer" do
-      assert {{:ok, _actions}, %{timer_ref: timer_ref}} = @module.handle_play(@dummy_state)
-      assert_received({:send_after, _interval, :tick, _, _})
-      assert timer_ref != nil
+      mock(Timer, :send_after, :mtimer)
+
+      assert {{:ok, _actions}, %{timer_ref: timer_ref}} =
+               @module.handle_other(:tick, @other_ctx, @dummy_state)
+
+      assert_called(Timer, :send_after, [_, :tick])
+      assert timer_ref == :mtimer
     end
 
-    test "filter out pads with eos: true and clear queues for all the others sinks" do
+    test "filter out pads with eos: true and clear queues for all the others outputs" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
-          %{data | eos: true}
-        end)
+        |> Bunch.Access.put_in([:outputs, :sink_1, :eos], true)
+        |> Bunch.Access.put_in([:outputs, :sink_2, :eos], true)
 
-      state =
-        state
-        |> Helper.Map.update_in([:sinks, :sink_2], fn %{eos: false} = data ->
-          %{data | eos: true}
-        end)
+      assert {{:ok, _actions}, %{outputs: outputs}} =
+               @module.handle_other(:tick, @other_ctx, state)
 
-      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
-      assert %{queue: "", eos: false} = sinks[:sink_3]
-      assert sinks |> Map.to_list() |> length == 1
+      assert %{queue: "", eos: false} = outputs[:sink_3]
+      assert outputs |> Map.to_list() |> length == 1
     end
 
     test "generate demands (normal mixing speed)" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
-          %{data | eos: true}
-        end)
+        |> Bunch.Access.put_in([:outputs, :sink_1, :eos], true)
 
       mock(@time, [monotonic_time: 0], @interval)
 
-      assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      assert {{:ok, actions}, %{outputs: outputs}} =
+               @module.handle_other(:tick, @other_ctx, state)
+
       demand = @interval |> Caps.time_to_bytes(@caps)
 
-      %{queue: queue_2} = state.sinks[:sink_2]
-      %{queue: queue_3} = state.sinks[:sink_3]
+      %{queue: queue_2} = state.outputs[:sink_2]
+      %{queue: queue_3} = state.outputs[:sink_3]
 
       demand_2 = 2 * demand - byte_size(queue_2)
       demand_3 = 2 * demand - byte_size(queue_3)
 
-      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, ^demand_2}}, &1))
-      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, ^demand_3}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, ^demand_2}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, ^demand_3}}, &1))
 
-      assert sinks |> Map.to_list() |> length == 2
+      assert outputs |> Map.to_list() |> length == 2
     end
 
     test "generate demands (slow mixing speed)" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{eos: false} = data ->
-          %{data | eos: true}
-        end)
+        |> Bunch.Access.put_in([:outputs, :sink_1, :eos], true)
 
       mock(@time, [monotonic_time: 0], div(7 * @interval, 2))
 
-      assert {{:ok, actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      assert {{:ok, actions}, %{outputs: outputs}} =
+               @module.handle_other(:tick, @other_ctx, state)
+
       demand = @interval |> Caps.time_to_bytes(@caps)
 
-      %{queue: queue_2} = state.sinks[:sink_2]
-      %{queue: queue_3} = state.sinks[:sink_3]
+      %{queue: queue_2} = state.outputs[:sink_2]
+      %{queue: queue_3} = state.outputs[:sink_3]
 
       demand_2 = 4 * demand - byte_size(queue_2)
       demand_3 = 4 * demand - byte_size(queue_3)
 
-      assert actions |> Enum.any?(&match?({:demand, {:sink_2, :self, ^demand_2}}, &1))
-      assert actions |> Enum.any?(&match?({:demand, {:sink_3, :self, ^demand_3}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_2, ^demand_2}}, &1))
+      assert actions |> Enum.any?(&match?({:demand, {:sink_3, ^demand_3}}, &1))
 
-      assert sinks |> Map.to_list() |> length == 2
+      assert outputs |> Map.to_list() |> length == 2
     end
 
-    test "update sinks" do
+    test "update outputs" do
       state =
         @dummy_state
-        |> Helper.Map.update_in([:sinks, :sink_1], fn %{queue: _queue, eos: eos} = data ->
+        |> Bunch.Access.update_in([:outputs, :sink_1], fn %{queue: _queue, eos: eos} = data ->
           %{data | queue: generate(<<1>>, @interval, @caps), eos: eos}
         end)
 
       mock(@time, [monotonic_time: 0], @interval)
 
-      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      assert {{:ok, _actions}, %{outputs: outputs}} =
+               @module.handle_other(:tick, @other_ctx, state)
+
       demand = @interval |> Caps.time_to_bytes(@caps)
-      %{queue: queue_2} = state.sinks[:sink_2]
-      %{queue: queue_3} = state.sinks[:sink_3]
+      %{queue: queue_2} = state.outputs[:sink_2]
+      %{queue: queue_3} = state.outputs[:sink_3]
 
       skip_2 = demand - byte_size(queue_2)
       skip_3 = demand - byte_size(queue_3)
 
-      assert %{skip: 0} = sinks[:sink_1]
-      assert %{skip: ^skip_2} = sinks[:sink_2]
-      assert %{skip: ^skip_3} = sinks[:sink_3]
+      assert %{skip: 0} = outputs[:sink_1]
+      assert %{skip: ^skip_2} = outputs[:sink_2]
+      assert %{skip: ^skip_3} = outputs[:sink_3]
     end
 
     test "update skips correctly (in case of slow mixing or timer problems)" do
@@ -335,36 +350,38 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
       mock(@time, [monotonic_time: 0], div(5 * @interval, 2))
 
-      assert {{:ok, _actions}, %{sinks: sinks}} = @module.handle_other(:tick, state)
+      assert {{:ok, _actions}, %{outputs: outputs}} =
+               @module.handle_other(:tick, @other_ctx, state)
+
       demand = @interval |> Caps.time_to_bytes(@caps)
-      %{queue: queue_2} = state.sinks[:sink_2]
-      %{queue: queue_3} = state.sinks[:sink_3]
+      %{queue: queue_2} = state.outputs[:sink_2]
+      %{queue: queue_3} = state.outputs[:sink_3]
 
       skip_2 = 2 * demand - byte_size(queue_2)
       skip_3 = 2 * demand - byte_size(queue_3)
 
-      assert %{skip: ^skip_2} = sinks[:sink_2]
-      assert %{skip: ^skip_3} = sinks[:sink_3]
+      assert %{skip: ^skip_2} = outputs[:sink_2]
+      assert %{skip: ^skip_3} = outputs[:sink_3]
     end
 
-    test "mix payloads (test1, everything is fine)" do
+    test "mix payloads when every input provided enough data" do
       state =
         1..3
         |> Enum.reduce(@dummy_state, fn id, state ->
           sink = :"sink_#{id}"
 
           state
-          |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} = data ->
+          |> Bunch.Access.update_in([:outputs, sink], fn %{queue: _queue, eos: eos} = data ->
             %{data | queue: generate(<<id>>, @interval, @caps), eos: eos}
           end)
         end)
 
-      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, state)
-      assert {:source, %Buffer{payload: payload}} = actions[:buffer]
+      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, @other_ctx, state)
+      assert {:output, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<6>>, @interval, @caps)
     end
 
-    test "mix payloads (test2, something is broken)" do
+    test "mix payloads when one input haven't provided data" do
       state =
         1..3
         |> Enum.reduce(@dummy_state, fn id, state ->
@@ -374,20 +391,20 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
             state
           else
             state
-            |> Helper.Map.update_in([:sinks, sink], fn %{queue: _queue, eos: eos} = data ->
+            |> Bunch.Access.update_in([:outputs, sink], fn %{queue: _queue, eos: eos} = data ->
               %{data | queue: generate(<<id>>, @interval, @caps), eos: eos}
             end)
           end
         end)
 
-      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, state)
-      assert {:source, %Buffer{payload: payload}} = actions[:buffer]
+      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, @other_ctx, state)
+      assert {:output, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<4>>, @interval, @caps)
     end
 
-    test "mix payloads (test3, everything is broken, silence should be generated)" do
-      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, @dummy_state)
-      assert {:source, %Buffer{payload: payload}} = actions[:buffer]
+    test "generate silence when none of the inputs have provided data" do
+      assert {{:ok, actions}, %{}} = @module.handle_other(:tick, @other_ctx, @dummy_state)
+      assert {:output, %Buffer{payload: payload}} = actions[:buffer]
       assert payload == generate(<<0>>, @interval, @caps)
     end
 

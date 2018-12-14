@@ -1,15 +1,23 @@
-defmodule Membrane.Element.LiveAudioMixer.Source do
+defmodule Membrane.Element.LiveAudioMixer do
   @moduledoc """
-  The module is used for mixing several streams from different sources.
-  Sources can be dynamically added and removed, it's ok. It listens to
-  the sources for `interval` of time and mixes received data after that.
-  If some of the sources don't provide enough data, that data will be discarded.
-  If none of the sources provides enough data, silence will be generated.
+  An element producing live audio stream by mixing a dynamically changing
+  set of input streams.
 
-  FIXME: it's possible that because of rounding errors we will send too much data
-  each `interval` of time (hello, `interval |> Caps.time_to_bytes(caps)``). It
-  should be fixed.
+  When the mixer goes to `:playing` state it sends one interval of silence
+  (or more if the `delay` is greater than 0, see the docs for options: `t:t/0`).
+  From that moment, after each interval of time the mixer takes the data received from
+  upstream elements and produces audio with the duration equal to the interval.
+
+  If some upstream element fails to deliver enough samples for the whole
+  interval to be mixed, its data will be dropped (including the data that
+  comes later but was supposed to be mixed in the current interval).
+
+  If none of the inputs provide enough data, the mixer will generate silence.
   """
+
+  # FIXME: it's possible that because of rounding errors we will send too much data
+  # each `interval` of time (hello, `interval |> Caps.time_to_bytes(caps)`). It
+  # should be fixed.
 
   use Bunch
   use Membrane.Log, tags: :membrane_element_live_audiomixer
@@ -21,41 +29,31 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   import Mockery.Macro
 
-  @timer Application.get_env(
-           :membrane_element_live_audiomixer,
-           :mixer_timer,
-           Membrane.Element.LiveAudioMixer.Timer
-         )
+  alias Membrane.Element.LiveAudioMixer.Timer
 
   def_options interval: [
                 type: :integer,
                 spec: Time.t(),
                 description: """
-                The value defines an interval of sending mixed stream to the
-                next element. Be aware that if a pad doesn't send enough bytes,
-                then all the bytes sent by the pad in the last interval timeframe
-                will be discarded. If no pad sends enough bytes, then silence will
-                be sent to the next element. The interval is not exact, it's just
-                an estimation.
+                Defines an interval of time (in milliseconds) between each mix of incoming streams.
+                See the moduledoc (`#{inspect(__MODULE__)}`) for more info.
                 """,
-                default: 1 |> Time.second()
+                default: 200
               ],
               delay: [
                 type: :integer,
                 spec: Time.t(),
                 description: """
-                The value specifies how much time should we wait before streaming.
-                If we don't have any delay then we won't be able to provide
-                required amount of bytes on time. This situation can be inappropriate
-                for some cases (for example, if we are playing a stream and delay
-                is too small then we will hear an unpleasant sound every `interval`
-                of time because of the lack of information). On the other
-                hand, if delay is too big, we will run out of memory, because we
-                will be supposed to store all the information we get from the sinks.
-                The first interval of time is filled with silence and is not counted
-                as a part of the delay. Delay is also filled with silence.
+                Duration (in milliseconds) of additional silence sent when mixer goes to `:playing`.
+
+                If the sink consuming from the mixer is live as well, this delay will
+                be a difference between the total duration of the produced audio and
+                consumed by sink.
+                It compensates for the time the buffers need
+                to reach the sink after being sent from mixer and prevents 'cracks'
+                produced on every interval because of audio samples being late.
                 """,
-                default: 500 |> Time.milliseconds()
+                default: 100
               ],
               caps: [
                 type: :struct,
@@ -71,15 +69,15 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
   @impl true
   def handle_init(options) do
-    state =
-      options
-      |> Map.from_struct()
-      |> Map.merge(%{
-        outputs: %{},
-        start_playing_time: nil,
-        tick: 1,
-        timer_ref: nil,
-      })
+    state = %{
+      caps: options.caps,
+      interval: Time.millisecond(options.interval),
+      delay: Time.millisecond(options.delay),
+      outputs: %{},
+      start_playing_time: nil,
+      tick: 1,
+      timer_ref: nil
+    }
 
     {:ok, state}
   end
@@ -94,13 +92,13 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
 
     silence = caps |> Caps.sound_of_silence(interval + delay)
     start_playing_time = mockable(Time).monotonic_time()
-    timer_ref = interval |> @timer.send_after(:tick)
+    timer_ref = interval |> mockable(Timer).send_after(:tick)
 
     new_state = %{
       state
       | start_playing_time: start_playing_time,
         tick: 1,
-        timer_ref: timer_ref,
+        timer_ref: timer_ref
     }
 
     actions =
@@ -119,7 +117,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       outputs: outputs
     } = state
 
-    timer_ref |> @timer.cancel_timer()
+    timer_ref |> mockable(Timer).cancel_timer()
 
     outputs =
       outputs
@@ -191,11 +189,11 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
       outputs: outputs
     } = state
 
-    payload = state |> mix_streams
+    payload = state |> mix_tracks
 
     now_time = mockable(Time).monotonic_time()
     next_tick = next_tick_number(now_time, state)
-    timer_ref = (tick_mono_time(next_tick, state) - now_time) |> @timer.send_after(:tick)
+    timer_ref = (tick_mono_time(next_tick, state) - now_time) |> mockable(Timer).send_after(:tick)
 
     demand = state |> get_default_demand
     outputs = outputs |> update_outputs(demand * (next_tick - tick))
@@ -213,9 +211,9 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     {{:ok, actions}, new_state}
   end
 
-  def handle_other(_message, state), do: {:ok, state}
+  def handle_other(_message, _ctx, state), do: {:ok, state}
 
-  defp mix_streams(state) do
+  defp mix_tracks(state) do
     %{
       interval: interval,
       caps: caps,
@@ -234,7 +232,7 @@ defmodule Membrane.Element.LiveAudioMixer.Source do
     end)
     |> Enum.filter(&(byte_size(&1) > 0))
     ~>> ([] -> [caps |> Caps.sound_of_silence(interval)])
-    |> AudioMix.mix_streams(caps)
+    |> AudioMix.mix_tracks(caps)
   end
 
   defp update_outputs(outputs, skip_add) do

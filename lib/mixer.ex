@@ -133,7 +133,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   def handle_pad_removed(pad, _context, state) do
     state =
       if state |> Bunch.Access.get_in([:outputs, pad]) != nil do
-        state |> Bunch.Access.update_in([:outputs, pad], &%{&1 | eos: true})
+        state |> Bunch.Access.put_in([:outputs, pad, :eos], true)
       else
         state
       end
@@ -159,7 +159,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   def handle_event(pad, %Event.EndOfStream{}, _context, state) do
-    state = state |> Bunch.Access.update_in([:outputs, pad], &%{&1 | eos: true})
+    state = state |> Bunch.Access.put_in([:outputs, pad, :eos], true)
     {:ok, state}
   end
 

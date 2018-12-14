@@ -1,9 +1,8 @@
 # Membrane.Element.LiveAudioMixer
 
-The element is just a simple mixer which mixes sounds from different sources. One
-can connect several different sources to the element and it will send mixed sounds
-every `interval` to the next element. The next element should be able to consume
-the produced amount of data, otherwise the internal buffer will be overflowed.
+The element is a simple mixer that compines audio from different sources.
+It is designed for use as a live source, meaning it will produce audio stream
+even if some (or all) of the sources fail to provide enough data.
 
 ## Installation
 

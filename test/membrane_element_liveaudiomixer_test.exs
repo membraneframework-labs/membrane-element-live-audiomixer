@@ -47,9 +47,45 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
       timer_ref: :mtimer
   }
 
-  test "handle_init/1 should create an empty state" do
-    assert {:ok, state} = @module.handle_init(@default_options)
-    assert @empty_state == state
+  def assert_interval_rounding(input_interval, expected, sample_rate) do
+    caps = %{@caps | sample_rate: sample_rate}
+
+    opts = %{
+      @default_options
+      | interval: input_interval,
+        caps: caps
+    }
+
+    assert {:ok, state} = @module.handle_init(opts)
+    assert state.interval == Time.milliseconds(expected)
+    frames_per_interval = Caps.time_to_frames(state.interval, caps, & &1)
+
+    assert_in_delta(frames_per_interval, round(frames_per_interval), 1.0e-10, """
+    Numbers of frames per interval should be an integer.
+    Interval = #{state.interval} ms,
+    frames = #{frames_per_interval},
+    sample rate = #{sample_rate} Hz
+    """)
+  end
+
+  describe "handle_init/1 should" do
+    test "create an empty state" do
+      assert {:ok, state} = @module.handle_init(@default_options)
+      assert @empty_state == state
+    end
+
+    test "properly adjust the interval if needed" do
+      assert_interval_rounding(100, 100, 44_100)
+      assert_interval_rounding(1, 10, 44_100)
+      assert_interval_rounding(28, 30, 44_100)
+      assert_interval_rounding(43, 50, 44_100)
+
+      assert_interval_rounding(1, 20, 22_050)
+      assert_interval_rounding(30, 40, 22_050)
+
+      assert_interval_rounding(1, 40, 11_025)
+      assert_interval_rounding(52, 80, 11_025)
+    end
   end
 
   describe "handle_prepared_to_playing should" do

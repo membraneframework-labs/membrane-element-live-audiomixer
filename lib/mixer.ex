@@ -15,10 +15,6 @@ defmodule Membrane.Element.LiveAudioMixer do
   If none of the inputs provide enough data, the mixer will generate silence.
   """
 
-  # FIXME: it's possible that because of rounding errors we will send too much data
-  # each `interval` of time (hello, `interval |> Caps.time_to_bytes(caps)`). It
-  # should be fixed.
-
   use Bunch
   use Membrane.Log, tags: :membrane_element_live_audiomixer
   use Membrane.Element.Base.Filter
@@ -35,8 +31,15 @@ defmodule Membrane.Element.LiveAudioMixer do
                 type: :integer,
                 spec: Time.t(),
                 description: """
-                Defines an interval of time (in milliseconds) between each mix of incoming streams.
-                See the moduledoc (`#{inspect(__MODULE__)}`) for more info.
+                Defines an interval of time (in milliseconds) between each mix of
+                incoming streams. The actual interval used can be rounded up 
+                to make sure the number of frames generated for this time period
+                is an integer.
+
+                For example, for sample rate 44 100 Hz the interval will be
+                rounded to a multiple of 10 ms.
+
+                See the moduledoc (`#{inspect(__MODULE__)}`) for details on how the interval is used.
                 """,
                 default: 200
               ],
@@ -69,10 +72,18 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   @impl true
   def handle_init(options) do
+    %__MODULE__{caps: caps, interval: interval, delay: delay} = options
+    interval = Time.milliseconds(interval)
+    second = Time.seconds(1)
+    base = div(second, gcd(second, caps.sample_rate))
+    # An interval has to be divisible by base to make sure there is no rounding
+    # when calculating demand for each interval (i.e. number of frames has to be an integer)
+    interval = trunc(Float.ceil(interval / base)) * base
+
     state = %{
       caps: options.caps,
-      interval: Time.millisecond(options.interval),
-      delay: Time.millisecond(options.delay),
+      interval: interval,
+      delay: Time.millisecond(delay),
       outputs: %{},
       start_playing_time: nil,
       tick: 1,
@@ -212,6 +223,9 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   def handle_other(_message, _ctx, state), do: {:ok, state}
+
+  defp gcd(a, 0), do: a
+  defp gcd(a, b), do: gcd(b, rem(a, b))
 
   defp mix_tracks(state) do
     %{

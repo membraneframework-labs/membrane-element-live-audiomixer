@@ -48,15 +48,13 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
 
   defp deps do
     [
-      {:ex_doc, "~> 0.19"},
-      # {:membrane_core, "~> 0.2.0", path: "../../core", override: true},
+      {:ex_doc, "~> 0.19", only: :dev, runtime: false},
       {:membrane_core, "~> 0.2.0", github: "membraneframework/membrane-core", override: true},
       {:membrane_caps_audio_raw, "~> 0.1.3"},
       {:membrane_loggers, "~> 0.2"},
-      # {:membrane_common_audiomix, path: "../../common-audiomix"},
       {:membrane_common_audiomix, github: "membraneframework/membrane-common-audiomix"},
       {:bunch, "~> 0.1.2"},
-      {:mockery, "~> 2.2.0", runtime: false}
+      {:mockery, "~> 2.3", runtime: false}
     ]
   end
 end

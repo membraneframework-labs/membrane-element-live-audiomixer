@@ -9,7 +9,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   upstream elements and produces audio with the duration equal to the interval.
 
   If some upstream element fails to deliver enough samples for the whole
-  interval to be mixed, its data will be dropped (including the data that
+  interval to be mixed, its data is dropped (including the data that
   comes later but was supposed to be mixed in the current interval).
 
   If none of the inputs provide enough data, the mixer will generate silence.
@@ -28,10 +28,9 @@ defmodule Membrane.Element.LiveAudioMixer do
   alias Membrane.Element.LiveAudioMixer.Timer
 
   def_options interval: [
-                type: :integer,
-                spec: Time.t(),
+                type: :time,
                 description: """
-                Defines an interval of time (in milliseconds) between each mix of
+                Defines an interval of time between each mix of
                 incoming streams. The actual interval used can be rounded up 
                 to make sure the number of frames generated for this time period
                 is an integer.
@@ -41,13 +40,12 @@ defmodule Membrane.Element.LiveAudioMixer do
 
                 See the moduledoc (`#{inspect(__MODULE__)}`) for details on how the interval is used.
                 """,
-                default: 200
+                default: 200 |> Time.millisecond()
               ],
               delay: [
-                type: :integer,
-                spec: Time.t(),
+                type: :time,
                 description: """
-                Duration (in milliseconds) of additional silence sent when mixer goes to `:playing`.
+                Duration of additional silence sent when mixer goes to `:playing`.
 
                 If the sink consuming from the mixer is live as well, this delay will
                 be a difference between the total duration of the produced audio and
@@ -56,7 +54,7 @@ defmodule Membrane.Element.LiveAudioMixer do
                 to reach the sink after being sent from mixer and prevents 'cracks'
                 produced on every interval because of audio samples being late.
                 """,
-                default: 100
+                default: 100 |> Time.millisecond()
               ],
               caps: [
                 type: :struct,
@@ -68,22 +66,23 @@ defmodule Membrane.Element.LiveAudioMixer do
               ]
 
   def_output_pads output: [mode: :push, caps: Caps]
-  def_input_pads input: [availability: :on_request, mode: :pull, demand_unit: :bytes, caps: Caps]
+  def_input_pads input: [availability: :on_request, demand_unit: :bytes, caps: Caps]
 
   @impl true
-  def handle_init(options) do
-    %__MODULE__{caps: caps, interval: interval, delay: delay} = options
-    interval = Time.milliseconds(interval)
-    second = Time.seconds(1)
-    base = div(second, gcd(second, caps.sample_rate))
-    # An interval has to be divisible by base to make sure there is no rounding
-    # when calculating demand for each interval (i.e. number of frames has to be an integer)
+  def handle_init(%__MODULE__{caps: caps, interval: interval} = options) when interval > 0 do
+    second = Time.second(1)
+    base = div(second, Integer.gcd(second, caps.sample_rate))
+    # An interval has to:
+    # - be an integer
+    # - correspond to an integer number of frames
+    # to make sure there is no rounding when calculating a demand for each interval
+    # It is ensured if interval is divisible by base
     interval = trunc(Float.ceil(interval / base)) * base
 
     state = %{
       caps: options.caps,
       interval: interval,
-      delay: Time.millisecond(delay),
+      delay: options.delay,
       outputs: %{},
       start_playing_time: nil,
       tick: 1,
@@ -105,7 +104,7 @@ defmodule Membrane.Element.LiveAudioMixer do
     start_playing_time = mockable(Time).monotonic_time()
     timer_ref = interval |> mockable(Timer).send_after(:tick)
 
-    new_state = %{
+    state = %{
       state
       | start_playing_time: start_playing_time,
         tick: 1,
@@ -113,12 +112,12 @@ defmodule Membrane.Element.LiveAudioMixer do
     }
 
     actions =
-      generate_demands(new_state) ++
+      generate_demands(state) ++
         [
           buffer: {:output, %Buffer{payload: silence}}
         ]
 
-    {{:ok, actions}, new_state}
+    {{:ok, actions}, state}
   end
 
   @impl true
@@ -141,32 +140,13 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_pad_removed(pad, _context, state) do
-    state =
-      if state |> Bunch.Access.get_in([:outputs, pad]) != nil do
-        state |> Bunch.Access.put_in([:outputs, pad, :eos], true)
-      else
-        state
-      end
-
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_event(pad, %Event.StartOfStream{}, ctx, state) do
+  def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
     now_time = mockable(Time).monotonic_time()
     tick_time = now_time |> next_tick_number(state) |> tick_mono_time(state)
     demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
 
-    actions =
-      if ctx.playback_state == :playing do
-        [demand: {pad, demand}]
-      else
-        []
-      end
-
     state = state |> Bunch.Access.put_in([:outputs, pad], %{queue: <<>>, eos: false, skip: 0})
-    {{:ok, actions}, state}
+    {{:ok, demand: {pad, demand}}, state}
   end
 
   def handle_event(pad, %Event.EndOfStream{}, _context, state) do
@@ -209,23 +189,20 @@ defmodule Membrane.Element.LiveAudioMixer do
     demand = state |> get_default_demand
     outputs = outputs |> update_outputs(demand * (next_tick - tick))
 
-    new_state = %{
+    state = %{
       state
       | outputs: outputs,
         tick: next_tick,
         timer_ref: timer_ref
     }
 
-    demands = new_state |> generate_demands
+    demands = state |> generate_demands
     actions = [{:buffer, {:output, %Buffer{payload: payload}}} | demands]
 
-    {{:ok, actions}, new_state}
+    {{:ok, actions}, state}
   end
 
   def handle_other(_message, _ctx, state), do: {:ok, state}
-
-  defp gcd(a, 0), do: a
-  defp gcd(a, b), do: gcd(b, rem(a, b))
 
   defp mix_tracks(state) do
     %{
@@ -237,14 +214,8 @@ defmodule Membrane.Element.LiveAudioMixer do
     demand = state |> get_default_demand
 
     outputs
-    |> Enum.map(fn {_pad, %{queue: queue}} ->
-      if byte_size(queue) == demand do
-        queue
-      else
-        <<>>
-      end
-    end)
-    |> Enum.filter(&(byte_size(&1) > 0))
+    |> Enum.map(fn {_pad, %{queue: queue}} -> queue end)
+    |> Enum.filter(&(byte_size(&1) == demand))
     ~>> ([] -> [caps |> Caps.sound_of_silence(interval)])
     |> AudioMix.mix_tracks(caps)
   end
@@ -255,9 +226,7 @@ defmodule Membrane.Element.LiveAudioMixer do
       skip = skip + skip_add - byte_size(queue)
       {pad, %{data | queue: <<>>, skip: skip}}
     end)
-    |> Enum.filter(fn {_pad, %{eos: eos}} ->
-      eos == false
-    end)
+    |> Enum.filter(fn {_pad, %{eos: eos}} -> not eos end)
     |> Map.new()
   end
 

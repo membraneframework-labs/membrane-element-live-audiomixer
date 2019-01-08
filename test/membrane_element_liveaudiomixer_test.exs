@@ -12,17 +12,15 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   @module Membrane.Element.LiveAudioMixer
   @time Membrane.Time
 
-  @interval_ms 200
-  @interval @interval_ms |> Time.milliseconds()
+  @interval 200 |> Time.millisecond()
 
-  @delay_ms 100
-  @delay @delay_ms |> Time.milliseconds()
+  @delay 100 |> Time.millisecond()
 
   @caps %Caps{sample_rate: 48_000, format: :s16le, channels: 2}
 
   @default_options %Membrane.Element.LiveAudioMixer{
-    interval: @interval_ms,
-    delay: @delay_ms,
+    interval: @interval,
+    delay: @delay,
     caps: @caps
   }
 
@@ -52,12 +50,12 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     opts = %{
       @default_options
-      | interval: input_interval,
+      | interval: input_interval |> Time.millisecond(),
         caps: caps
     }
 
     assert {:ok, state} = @module.handle_init(opts)
-    assert state.interval == Time.milliseconds(expected)
+    assert state.interval == Time.millisecond(expected)
     frames_per_interval = Caps.time_to_frames(state.interval, caps, & &1)
 
     assert_in_delta(frames_per_interval, round(frames_per_interval), 1.0e-10, """
@@ -136,44 +134,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
       assert outputs |> Map.to_list() |> length == 3
     end
-  end
-
-  describe "handle_pad_remove should" do
-    test "eos to true for the given pad if the pad exists in outputs" do
-      assert {:ok, %{outputs: outputs}} =
-               @module.handle_pad_removed(:sink_1, :context, @dummy_state)
-
-      assert outputs |> Map.to_list() |> length == 3
-
-      assert outputs
-             |> Enum.all?(fn {pad, %{eos: eos}} ->
-               pad == :sink_1 == eos
-             end)
-    end
-
-    test "do nothing if the given pad does not exists in outputs" do
-      assert {:ok, %{outputs: outputs}} =
-               @module.handle_pad_removed(:random_sink, :context, @dummy_state)
-
-      assert outputs |> Map.to_list() |> length == 3
-
-      assert outputs
-             |> Enum.all?(fn {_pad, %{eos: eos}} ->
-               eos == false
-             end)
-    end
-  end
-
-  test "handle_pad_removed should set eos to true for a given pad" do
-    assert {:ok, %{outputs: outputs}} =
-             @module.handle_pad_removed(:sink_1, :context, @dummy_state)
-
-    assert outputs |> Map.to_list() |> length == 3
-
-    assert outputs
-           |> Enum.all?(fn {pad, %{eos: eos}} ->
-             pad == :sink_1 == eos
-           end)
   end
 
   @event_ctx %Ctx.Event{

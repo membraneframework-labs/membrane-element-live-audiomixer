@@ -1,10 +1,11 @@
-defmodule Membrane.Element.LiveAudioMixer do
+defmodule Membrane.Element.LiveAudioMixer.App do
+  @moduledoc false
   use Application
 
   def start(_type, _args) do
     children = []
 
-    opts = [strategy: :one_to_one, name: Membrane.Element.TimedAudioMixer]
+    opts = [strategy: :one_to_one, name: __MODULE__]
     Supervisor.start_link(children, opts)
   end
 end

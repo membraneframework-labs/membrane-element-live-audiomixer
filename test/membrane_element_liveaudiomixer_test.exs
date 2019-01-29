@@ -18,10 +18,13 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
   @caps %Caps{sample_rate: 48_000, format: :s16le, channels: 2}
 
+  @mute_by_default false
+
   @default_options %Membrane.Element.LiveAudioMixer{
     interval: @interval,
     delay: @delay,
-    caps: @caps
+    caps: @caps,
+    mute_by_default: @mute_by_default
   }
 
   @empty_state %{
@@ -29,6 +32,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     delay: @delay,
     caps: @caps,
     outputs: %{},
+    mute_by_default: @mute_by_default,
     start_playing_time: nil,
     tick: 1,
     timer_ref: nil
@@ -37,9 +41,9 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
   @dummy_state %{
     @empty_state
     | outputs: %{
-        :sink_1 => %{queue: <<1, 2, 3>>, eos: false, skip: 0},
-        :sink_2 => %{queue: <<3, 2, 1>>, eos: false, skip: 0},
-        :sink_3 => %{queue: <<1, 2, 3>>, eos: false, skip: 0}
+        :sink_1 => %{queue: <<1, 2, 3>>, eos: false, skip: 0, mute: @mute_by_default},
+        :sink_2 => %{queue: <<3, 2, 1>>, eos: false, skip: 0, mute: @mute_by_default},
+        :sink_3 => %{queue: <<1, 2, 3>>, eos: false, skip: 0, mute: @mute_by_default}
       },
       start_playing_time: 0,
       timer_ref: :mtimer

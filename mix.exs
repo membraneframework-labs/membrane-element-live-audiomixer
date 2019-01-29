@@ -7,6 +7,7 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
   def project do
     [
       app: :membrane_element_live_audiomixer,
+      compilers: [:unifex, :bundlex] ++ Mix.compilers(),
       version: @version,
       elixir: "~> 1.7",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -54,7 +55,8 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
       {:membrane_loggers, "~> 0.2"},
       {:membrane_common_audiomix, github: "membraneframework/membrane-common-audiomix"},
       {:bunch, "~> 0.2", override: true},
-      {:mockery, "~> 2.3", runtime: false}
+      {:mockery, "~> 2.3", runtime: false},
+      {:unifex, github: "membraneframework/unifex", override: true}
     ]
   end
 end

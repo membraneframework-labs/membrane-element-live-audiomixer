@@ -2,6 +2,7 @@ defmodule Membrane.Element.LiveAudioMixer.Timer do
   @moduledoc false
 
   alias Membrane.Time
+  use Unifex.Loader
 
   def send_after(time, msg, opts \\ []) do
     Process.send_after(self(), msg, time |> Time.to_milliseconds(), opts)

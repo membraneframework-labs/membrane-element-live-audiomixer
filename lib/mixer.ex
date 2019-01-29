@@ -109,15 +109,15 @@ defmodule Membrane.Element.LiveAudioMixer do
     } = state
 
     silence = caps |> Caps.sound_of_silence(interval + delay)
-    start_playing_time = mockable(Time).monotonic_time()
-    timer_ref = interval |> mockable(Timer).send_after(:tick)
 
-    state = %{
-      state
-      | start_playing_time: start_playing_time,
-        tick: 1,
-        timer_ref: timer_ref
-    }
+    {:ok, timer_ref} =
+      mockable(Timer).start_sender(
+        self(),
+        interval |> Time.to_milliseconds(),
+        delay |> Time.to_milliseconds()
+      )
+
+    state = %{state | timer_ref: timer_ref}
 
     actions =
       generate_demands(state) ++
@@ -135,7 +135,7 @@ defmodule Membrane.Element.LiveAudioMixer do
       outputs: outputs
     } = state
 
-    timer_ref |> mockable(Timer).cancel_timer()
+    timer_ref |> mockable(Timer).stop_sender()
 
     outputs =
       outputs
@@ -163,9 +163,8 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   @impl true
   def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
-    now_time = mockable(Time).monotonic_time()
-    tick_time = now_time |> next_tick_number(state) |> tick_mono_time(state)
-    demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
+    # FIXME: calculate demand and skip here
+    demand = state |> get_default_demand()
 
     {{:ok, demand: {pad, demand}}, state}
   end
@@ -195,27 +194,17 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_other(:tick, %{playback_state: :playing}, state) do
+  def handle_other({:tick, _cnt}, %{playback_state: :playing}, state) do
     %{
-      tick: tick,
       outputs: outputs
     } = state
 
     payload = state |> mix_tracks
 
-    now_time = mockable(Time).monotonic_time()
-    next_tick = next_tick_number(now_time, state)
-    timer_ref = (tick_mono_time(next_tick, state) - now_time) |> mockable(Timer).send_after(:tick)
-
     demand = state |> get_default_demand
-    outputs = outputs |> update_outputs(demand * (next_tick - tick))
+    outputs = outputs |> update_outputs(demand)
 
-    state = %{
-      state
-      | outputs: outputs,
-        tick: next_tick,
-        timer_ref: timer_ref
-    }
+    state = %{state | outputs: outputs}
 
     demands = state |> generate_demands
     actions = [{:buffer, {:output, %Buffer{payload: payload}}} | demands]
@@ -247,7 +236,9 @@ defmodule Membrane.Element.LiveAudioMixer do
     {:ok, state}
   end
 
-  def handle_other(_message, _ctx, state), do: {:ok, state}
+  def handle_other(_message, _ctx, state) do
+    {:ok, state}
+  end
 
   defp mix_tracks(state) do
     %{
@@ -287,23 +278,5 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   defp get_default_demand(%{interval: interval, caps: caps}) do
     interval |> Caps.time_to_bytes(caps)
-  end
-
-  defp next_tick_number(time, state) do
-    %{
-      interval: interval,
-      start_playing_time: start_playing_time
-    } = state
-
-    div(time - start_playing_time, interval) + 1
-  end
-
-  defp tick_mono_time(tick, state) do
-    %{
-      interval: interval,
-      start_playing_time: start_playing_time
-    } = state
-
-    start_playing_time + tick * interval
   end
 end

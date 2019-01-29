@@ -145,6 +145,16 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     playback_state: :playing
   }
 
+  describe "handle_pad_added should" do
+    test "add an instance to outputs map" do
+      assert {:ok, %{outputs: outputs}} = @module.handle_pad_added(:sink_4, %{}, @dummy_state)
+
+      assert outputs |> Map.to_list() |> length == 4
+      assert outputs |> Map.has_key?(:sink_4)
+      assert %{queue: <<>>, eos: false, skip: 0, mute: @mute_by_default} = outputs[:sink_4]
+    end
+  end
+
   describe "handle_event should" do
     test "do nothing if the event is not SOS nor EOS" do
       assert {:ok, @dummy_state} =
@@ -167,15 +177,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
              |> Enum.all?(fn {_, %{eos: eos}} ->
                eos == false
              end)
-    end
-
-    test "add an instance in outputs map (on StartOfStream event)" do
-      assert {{:ok, _actions}, %{outputs: outputs}} =
-               @module.handle_event(:sink_4, %Event.StartOfStream{}, @event_ctx, @dummy_state)
-
-      assert outputs |> Map.to_list() |> length == 4
-      assert outputs |> Map.has_key?(:sink_4)
-      assert %{queue: <<>>, eos: false, skip: 0} = outputs[:sink_4]
     end
 
     test "generate the appropriate demand for a given pad (on StartOfStream event)" do

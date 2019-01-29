@@ -148,11 +148,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
-    now_time = mockable(Time).monotonic_time()
-    tick_time = now_time |> next_tick_number(state) |> tick_mono_time(state)
-    demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
-
+  def handle_pad_added(pad, _ctx, state) do
     state =
       state
       |> Bunch.Access.put_in([:outputs, pad], %{
@@ -161,6 +157,15 @@ defmodule Membrane.Element.LiveAudioMixer do
         skip: 0,
         mute: state.mute_by_default
       })
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
+    now_time = mockable(Time).monotonic_time()
+    tick_time = now_time |> next_tick_number(state) |> tick_mono_time(state)
+    demand = (tick_time - now_time) |> Caps.time_to_bytes(state.caps)
 
     {{:ok, demand: {pad, demand}}, state}
   end

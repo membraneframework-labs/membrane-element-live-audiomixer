@@ -56,7 +56,7 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
       {:membrane_common_audiomix, github: "membraneframework/membrane-common-audiomix"},
       {:bunch, "~> 0.2", override: true},
       {:mockery, "~> 2.3", runtime: false},
-      {:unifex, github: "membraneframework/unifex", override: true}
+      {:unifex, "~> 0.2"}
     ]
   end
 end

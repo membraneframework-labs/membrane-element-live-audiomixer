@@ -1,8 +1,12 @@
-module Membrane.Element.LiveAudioMixer.Timer
+module Membrane.Element.LiveAudioMixer.Timer.LibShout
 
-spec start_sender(pid, interval :: unsigned, delay :: unsigned) ::
+spec start_native_sender(pid, interval :: uint64, delay :: uint64) ::
        {:ok :: label, state} | {:error :: label, reason :: atom}
 
-spec stop_sender(state) :: (:ok :: label) | {:error :: label, :stopped :: label}
+spec stop_native_sender(state) :: (:ok :: label) | {:error :: label, :stopped :: label}
 
-sends {:tick :: label, cur_tick :: unsigned}
+spec native_time() :: time :: uint64
+
+dirty :io, stop_native_sender: 1
+
+sends {:tick :: label, cur_time :: uint64}

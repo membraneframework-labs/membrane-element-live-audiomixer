@@ -23,8 +23,6 @@ defmodule Membrane.Element.LiveAudioMixer do
   alias Membrane.Caps.Audio.Raw, as: Caps
   alias Membrane.Common.AudioMix
 
-  import Mockery.Macro
-
   alias Membrane.Element.LiveAudioMixer.Timer
 
   def_options interval: [
@@ -70,6 +68,13 @@ defmodule Membrane.Element.LiveAudioMixer do
                 Determines whether the newly added pads should be muted by default.
                 """,
                 default: false
+              ],
+              timer: [
+                type: :module,
+                description: """
+                Module implementing `#{inspect(Timer)}` behaviour used as timer for ticks.
+                """,
+                default: Timer.Erlang
               ]
 
   def_output_pads output: [mode: :push, caps: Caps]
@@ -92,8 +97,8 @@ defmodule Membrane.Element.LiveAudioMixer do
       delay: options.delay,
       outputs: %{},
       mute_by_default: options.mute_by_default,
-      start_playing_time: nil,
-      tick: 1,
+      next_tick_time: nil,
+      timer: options.timer,
       timer_ref: nil
     }
 
@@ -105,19 +110,19 @@ defmodule Membrane.Element.LiveAudioMixer do
     %{
       interval: interval,
       delay: delay,
-      caps: caps
+      caps: caps,
+      timer: timer
     } = state
 
     silence = caps |> Caps.sound_of_silence(interval + delay)
 
-    {:ok, timer_ref} =
-      mockable(Timer).start_sender(
-        self(),
-        interval |> Time.to_milliseconds(),
-        delay |> Time.to_milliseconds()
-      )
+    {:ok, timer_ref} = timer.start_sender(self(), interval, delay)
 
-    state = %{state | timer_ref: timer_ref}
+    state = %{
+      state
+      | timer_ref: timer_ref,
+        next_tick_time: timer.current_time() + interval
+    }
 
     actions =
       generate_demands(state) ++
@@ -132,10 +137,11 @@ defmodule Membrane.Element.LiveAudioMixer do
   def handle_playing_to_prepared(_ctx, state) do
     %{
       timer_ref: timer_ref,
+      timer: timer,
       outputs: outputs
     } = state
 
-    timer_ref |> mockable(Timer).stop_sender()
+    timer_ref |> timer.stop_sender()
 
     outputs =
       outputs
@@ -153,6 +159,7 @@ defmodule Membrane.Element.LiveAudioMixer do
       state
       |> Bunch.Access.put_in([:outputs, pad], %{
         queue: <<>>,
+        sos: false,
         eos: false,
         skip: 0,
         mute: state.mute_by_default
@@ -162,10 +169,29 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
-    # FIXME: calculate demand and skip here
-    demand = state |> get_default_demand()
+  def handle_pad_removed(pad, _ctx, state) do
+    state =
+      if state.outputs |> Map.has_key?(pad) do
+        state |> Bunch.Access.put_in([:outputs, pad, :eos], true)
+      else
+        state
+      end
 
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
+    %{next_tick_time: next, caps: caps, interval: interval} = state
+    default_demand = state |> get_default_demand
+
+    now = state.timer.current_time()
+    time_to_tick = (next - now) |> max(0)
+    silent_prefix = caps |> Caps.sound_of_silence(interval - time_to_tick)
+    demand = default_demand - byte_size(silent_prefix)
+
+    state = state |> Bunch.Access.put_in([:outputs, pad, :queue], silent_prefix)
+    state = state |> Bunch.Access.put_in([:outputs, pad, :sos], true)
     {{:ok, demand: {pad, demand}}, state}
   end
 
@@ -194,7 +220,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_other({:tick, _cnt}, %{playback_state: :playing}, state) do
+  def handle_other({:tick, time}, %{playback_state: :playing}, state) do
     %{
       outputs: outputs
     } = state
@@ -204,7 +230,7 @@ defmodule Membrane.Element.LiveAudioMixer do
     demand = state |> get_default_demand
     outputs = outputs |> update_outputs(demand)
 
-    state = %{state | outputs: outputs}
+    state = %{state | outputs: outputs, next_tick_time: time}
 
     demands = state |> generate_demands
     actions = [{:buffer, {:output, %Buffer{payload: payload}}} | demands]
@@ -259,11 +285,15 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   defp update_outputs(outputs, skip_add) do
     outputs
-    |> Enum.map(fn {pad, %{queue: queue, skip: skip} = data} ->
-      skip = skip + skip_add - byte_size(queue)
-      {pad, %{data | queue: <<>>, skip: skip}}
-    end)
     |> Enum.filter(fn {_pad, %{eos: eos}} -> not eos end)
+    |> Enum.map(fn {pad, %{sos: started?, queue: queue, skip: skip} = data} ->
+      if started? do
+        skip = skip + skip_add - byte_size(queue)
+        {pad, %{data | queue: <<>>, skip: skip}}
+      else
+        {pad, data}
+      end
+    end)
     |> Map.new()
   end
 
@@ -271,8 +301,12 @@ defmodule Membrane.Element.LiveAudioMixer do
     demand = get_default_demand(state)
 
     state.outputs
-    |> Enum.map(fn {pad, %{skip: skip}} ->
-      {:demand, {pad, demand + skip}}
+    |> Enum.flat_map(fn {pad, %{skip: skip, sos: started?}} ->
+      if started? do
+        [{:demand, {pad, demand + skip}}]
+      else
+        []
+      end
     end)
   end
 

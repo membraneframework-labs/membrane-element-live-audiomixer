@@ -1,14 +1,30 @@
 defmodule Membrane.Element.LiveAudioMixer.Timer do
-  @moduledoc false
-
+  @moduledoc """
+  A behaviour for a timer that can be used by the mixer.
+  """
   alias Membrane.Time
-  use Unifex.Loader
 
-  def send_after(time, msg, opts \\ []) do
-    Process.send_after(self(), msg, time |> Time.to_milliseconds(), opts)
-  end
+  @type t :: reference() | pid()
 
-  def cancel_timer(timer_ref, options \\ []) do
-    Process.cancel_timer(timer_ref, options)
-  end
+  @type tick_t :: {:tick, next_tick_time :: Time.t()}
+
+  @doc """
+  Start a sender, that will periodically send a `t:tick_t/0` message to the target
+  """
+  @callback start_sender(
+              target :: pid(),
+              interval :: Time.t(),
+              delay :: Time.t()
+            ) ::
+              {:ok, t} | {:error, any()}
+
+  @doc """
+  Stops a sender
+  """
+  @callback stop_sender(t) :: :ok | {:error, any()}
+
+  @doc """
+  Returns current time
+  """
+  @callback current_time() :: Time.t()
 end

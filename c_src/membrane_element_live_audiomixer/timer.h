@@ -1,11 +1,12 @@
 #pragma once
 
 #include <unifex/unifex.h>
+#include <stdint.h>
 
 typedef struct _timer_state {
   UnifexPid target;
-  unsigned interval;
-  unsigned delay;
+  uint64_t interval;
+  uint64_t delay;
 
   int thread_run;  // Flag controlling the thread
   UnifexMutex *lock;

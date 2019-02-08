@@ -2,21 +2,15 @@
 #include <sys/time.h>
 
 static void * timer_thread_fun(void * arg);
+static void stop_sender_thread(UnifexNifState * state);
 static void shout_like_sleep(uint64_t sleep_time_ms);
 static uint64_t shout_like_get_time(void);
 
 void handle_destroy_state(UnifexEnv *env, UnifexNifState * state) {
   UNIFEX_UNUSED(env);
-  printf("destroy\n");
   if (state->thread_id != NULL) {
-    unifex_mutex_lock(state->lock);
-    state->thread_run = 0;
-    unifex_mutex_unlock(state->lock);
-
-    // FIXME: this can take too much time
-    unifex_thread_join(*state->thread_id, NULL);
-    unifex_free(state->thread_id);
-    state->thread_id = NULL;
+    // FIXME: This can take a while...
+    stop_sender_thread(state);
   }
   unifex_mutex_destroy(state->lock);
 }
@@ -46,14 +40,7 @@ start_native_sender_exit:
 UNIFEX_TERM stop_native_sender(UnifexEnv* env, UnifexNifState * state) {
   UNIFEX_TERM result;
   if (state->thread_id != NULL) {
-    unifex_mutex_lock(state->lock);
-    state->thread_run = 0;
-    unifex_mutex_unlock(state->lock);
-
-    unifex_thread_join(*state->thread_id, NULL);
-
-    unifex_free(state->thread_id);
-    state->thread_id = NULL;
+    stop_sender_thread(state);
     result = stop_native_sender_result_ok(env);
   } else {
     result = stop_native_sender_result_error_stopped(env);
@@ -65,6 +52,17 @@ UNIFEX_TERM stop_native_sender(UnifexEnv* env, UnifexNifState * state) {
 
 UNIFEX_TERM native_time(UnifexEnv * env) {
   return native_time_result(env, shout_like_get_time());
+}
+
+static void stop_sender_thread(UnifexNifState * state) {
+  unifex_mutex_lock(state->lock);
+  state->thread_run = 0;
+  unifex_mutex_unlock(state->lock);
+
+  unifex_thread_join(*state->thread_id, NULL);
+
+  unifex_free(state->thread_id);
+  state->thread_id = NULL;
 }
 
 static void shout_like_sleep(uint64_t sleep_time_ms) {

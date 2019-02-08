@@ -55,7 +55,6 @@ defmodule Membrane.Element.LiveAudioMixer.MixProject do
       {:membrane_loggers, "~> 0.2"},
       {:membrane_common_audiomix, github: "membraneframework/membrane-common-audiomix"},
       {:bunch, "~> 0.2", override: true},
-      {:mockery, "~> 2.3", runtime: false},
       {:unifex, "~> 0.2"}
     ]
   end

@@ -13,7 +13,6 @@ end
 
 defmodule Membrane.Element.LiveAudioMixer.Test do
   use ExUnit.Case, async: false
-  use Mockery
 
   alias Bunch
   alias Membrane.{Buffer, Event}
@@ -164,9 +163,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "do nothing if the event is not SOS nor EOS" do
       assert {:ok, @dummy_state} =
                @module.handle_event(:sink_1, %Event.Underrun{}, @event_ctx, @dummy_state)
-
-      refute_called(Fake.Timer, :send_after)
-      refute_called(Fake.Timer, :cancel_timer)
     end
 
     test "set eos for the given pad to true (on EndOfStream event)" do

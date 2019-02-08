@@ -1,8 +1,6 @@
 defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
   use GenServer
 
-  import Mockery.Macro
-
   alias Membrane.Element.LiveAudioMixer.Timer
   alias Membrane.Time
 
@@ -20,7 +18,7 @@ defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
 
   @impl Timer
   def current_time() do
-    mockable(Time).monotonic_time()
+    Time.monotonic_time()
   end
 
   @impl GenServer

@@ -1,12 +1,12 @@
 #include "timer.h"
 #include <sys/time.h>
 
-static void * timer_thread_fun(void * arg);
-static void stop_sender_thread(UnifexNifState * state);
+static void *timer_thread_fun(void *arg);
+static void stop_sender_thread(UnifexNifState *state);
 static void shout_like_sleep(uint64_t sleep_time_ms);
 static uint64_t shout_like_get_time(void);
 
-void handle_destroy_state(UnifexEnv *env, UnifexNifState * state) {
+void handle_destroy_state(UnifexEnv *env, UnifexNifState *state) {
   UNIFEX_UNUSED(env);
   if (state->thread_id != NULL) {
     // FIXME: This can take a while...
@@ -15,16 +15,18 @@ void handle_destroy_state(UnifexEnv *env, UnifexNifState * state) {
   unifex_mutex_destroy(state->lock);
 }
 
-UNIFEX_TERM start_native_sender(UnifexEnv* env, UnifexPid pid, uint64_t interval, uint64_t delay) {
+UNIFEX_TERM start_native_sender(UnifexEnv *env, UnifexPid pid,
+                                uint64_t interval, uint64_t delay) {
   UNIFEX_TERM result;
-  UnifexNifState * state = unifex_alloc_state(env);
+  UnifexNifState *state = unifex_alloc_state(env);
   state->target = pid;
   state->thread_run = 1;
   state->lock = unifex_mutex_create("timer_mutex");
   state->interval = interval;
   state->delay = delay;
   state->thread_id = unifex_alloc(sizeof(UnifexTid));
-  int err = unifex_thread_create("timer_thread", state->thread_id, timer_thread_fun, state);
+  int err = unifex_thread_create("timer_thread", state->thread_id,
+                                 timer_thread_fun, state);
 
   if (err != 0) {
     result = start_native_sender_result_error(env, "thread_create");
@@ -37,7 +39,7 @@ start_native_sender_exit:
   return result;
 }
 
-UNIFEX_TERM stop_native_sender(UnifexEnv* env, UnifexNifState * state) {
+UNIFEX_TERM stop_native_sender(UnifexEnv *env, UnifexNifState *state) {
   UNIFEX_TERM result;
   if (state->thread_id != NULL) {
     stop_sender_thread(state);
@@ -50,11 +52,11 @@ UNIFEX_TERM stop_native_sender(UnifexEnv* env, UnifexNifState * state) {
   return result;
 }
 
-UNIFEX_TERM native_time(UnifexEnv * env) {
+UNIFEX_TERM native_time(UnifexEnv *env) {
   return native_time_result(env, shout_like_get_time());
 }
 
-static void stop_sender_thread(UnifexNifState * state) {
+static void stop_sender_thread(UnifexNifState *state) {
   unifex_mutex_lock(state->lock);
   state->thread_run = 0;
   unifex_mutex_unlock(state->lock);
@@ -81,8 +83,8 @@ static uint64_t shout_like_get_time(void) {
   return (uint64_t)(mtv.tv_sec) * 1000 + (uint64_t)(mtv.tv_usec) / 1000;
 }
 
-static void * timer_thread_fun(void * arg) {
-  UnifexNifState * state = (UnifexNifState *) arg;
+static void *timer_thread_fun(void *arg) {
+  UnifexNifState *state = (UnifexNifState *)arg;
   UnifexEnv *env = unifex_alloc_env();
 
   uint64_t start_time = shout_like_get_time();
@@ -90,11 +92,12 @@ static void * timer_thread_fun(void * arg) {
 
   uint64_t tick_cnt = 1;
   int should_quit = 0;
-  while(!should_quit) {
+  while (!should_quit) {
 
     tick_cnt += 1;
     uint64_t next_tick_time = start_time + state->interval * tick_cnt;
-    int res = send_tick(env, state->target, UNIFEX_FROM_CREATED_THREAD, next_tick_time);
+    int res = send_tick(env, state->target, UNIFEX_FROM_CREATED_THREAD,
+                        next_tick_time);
     if (!res) {
       break;
     }
@@ -106,4 +109,3 @@ static void * timer_thread_fun(void * arg) {
   }
   return NULL;
 }
-

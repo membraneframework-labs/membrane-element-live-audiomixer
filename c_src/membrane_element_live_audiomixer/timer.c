@@ -101,7 +101,14 @@ static void *timer_thread_fun(void *arg) {
     if (!res) {
       break;
     }
-    shout_like_sleep(next_tick_time - shout_like_get_time());
+
+    // In case of extreme system load it is possible to
+    // go past the next_tick_time. Substraction in such case would result
+    // in unsigned integer underflow causing a VERY long sleep
+    uint64_t now = shout_like_get_time();
+    if (next_tick_time > now) {
+      shout_like_sleep(next_tick_time - now);
+    }
 
     unifex_mutex_lock(state->lock);
     should_quit = !state->thread_run;

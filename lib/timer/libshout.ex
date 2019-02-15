@@ -1,4 +1,11 @@
 defmodule Membrane.Element.LiveAudioMixer.Timer.LibShout do
+  @moduledoc """
+  Timer imitiating one used by libshout for synchronization
+
+  It gets time by calling `gettimeofday` and rounding the result to milliseconds.
+  For waiting uses `select` system call (compared to nanosleep uses microseconds
+  instead of nanoseconds and cannot be interrupted by a signal)
+  """
   use GenServer
   use Unifex.Loader
   alias Membrane.Element.LiveAudioMixer.Timer

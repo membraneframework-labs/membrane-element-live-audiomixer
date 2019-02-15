@@ -38,21 +38,28 @@ defmodule Membrane.Element.LiveAudioMixer do
 
                 See the moduledoc (`#{inspect(__MODULE__)}`) for details on how the interval is used.
                 """,
-                default: 200 |> Time.millisecond()
+                default: 500 |> Time.millisecond()
               ],
-              delay: [
+              in_delay: [
                 type: :time,
                 description: """
-                Duration of additional silence sent when mixer goes to `:playing`.
+                A delay before the input streams are mixed for the first time.
+                """,
+                default: 200 |> Time.millisecond()
+              ],
+              out_delay: [
+                type: :time,
+                description: """
+                Duration of additional silence sent before first buffer with mixed audio.
 
-                If the sink consuming from the mixer is live as well, this delay will
+                Effectively delays the mixed output stream: this delay will
                 be a difference between the total duration of the produced audio and
                 consumed by sink.
                 It compensates for the time the buffers need
                 to reach the sink after being sent from mixer and prevents 'cracks'
                 produced on every interval because of audio samples being late.
                 """,
-                default: 100 |> Time.millisecond()
+                default: 50 |> Time.millisecond()
               ],
               caps: [
                 type: :struct,
@@ -91,16 +98,15 @@ defmodule Membrane.Element.LiveAudioMixer do
     # It is ensured if interval is divisible by base
     interval = trunc(Float.ceil(interval / base)) * base
 
-    state = %{
-      caps: options.caps,
-      interval: interval,
-      delay: options.delay,
-      outputs: %{},
-      mute_by_default: options.mute_by_default,
-      next_tick_time: nil,
-      timer: options.timer,
-      timer_ref: nil
-    }
+    state =
+      options
+      |> Map.from_struct()
+      |> Map.merge(%{
+        interval: interval,
+        outputs: %{},
+        next_tick_time: nil,
+        timer_ref: nil
+      })
 
     {:ok, state}
   end
@@ -109,28 +115,19 @@ defmodule Membrane.Element.LiveAudioMixer do
   def handle_prepared_to_playing(_ctx, state) do
     %{
       interval: interval,
-      delay: delay,
-      caps: caps,
+      in_delay: in_delay,
       timer: timer
     } = state
 
-    silence = caps |> Caps.sound_of_silence(interval + delay)
-
-    {:ok, timer_ref} = timer.start_sender(self(), interval, delay)
+    {:ok, timer_ref} = timer.start_sender(self(), interval, in_delay)
 
     state = %{
       state
       | timer_ref: timer_ref,
-        next_tick_time: timer.current_time() + interval
+        next_tick_time: timer.current_time() + in_delay
     }
 
-    actions =
-      generate_demands(state) ++
-        [
-          buffer: {:output, %Buffer{payload: silence}}
-        ]
-
-    {{:ok, actions}, state}
+    {{:ok, generate_demands(state)}, state}
   end
 
   @impl true
@@ -187,10 +184,19 @@ defmodule Membrane.Element.LiveAudioMixer do
 
     now = state.timer.current_time()
     time_to_tick = (next - now) |> max(0)
-    silent_prefix = caps |> Caps.sound_of_silence(interval - time_to_tick)
-    demand = default_demand - byte_size(silent_prefix)
 
-    state = state |> Bunch.Access.put_in([:outputs, pad, :queue], silent_prefix)
+    {demand, state} =
+      if time_to_tick < interval do
+        silent_prefix = caps |> Caps.sound_of_silence(interval - time_to_tick)
+        state = state |> Bunch.Access.put_in([:outputs, pad, :queue], silent_prefix)
+        {default_demand - byte_size(silent_prefix), state}
+      else
+        # possible if in_delay is greater than interval
+        to_skip = (time_to_tick - interval) |> Caps.time_to_bytes(caps)
+        state = state |> Bunch.Access.put_in([:outputs, pad, :skip], to_skip)
+        {to_skip + default_demand, state}
+      end
+
     state = state |> Bunch.Access.put_in([:outputs, pad, :sos], true)
     {{:ok, demand: {pad, demand}}, state}
   end
@@ -220,6 +226,21 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
+  def handle_other(
+        {:tick, _} = tick,
+        %{playback_state: :playing} = ctx,
+        %{out_delay: out_delay, caps: caps} = state
+      )
+      when out_delay > 0 do
+    silence =
+      caps
+      |> Caps.sound_of_silence(out_delay)
+      ~> {:buffer, {:output, %Buffer{payload: &1}}}
+
+    {{:ok, actions}, state} = handle_other(tick, ctx, %{state | out_delay: 0})
+    {{:ok, [silence | actions]}, state}
+  end
+
   def handle_other({:tick, time}, %{playback_state: :playing}, state) do
     %{
       outputs: outputs

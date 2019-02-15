@@ -87,10 +87,10 @@ static void *timer_thread_fun(void *arg) {
   UnifexNifState *state = (UnifexNifState *)arg;
   UnifexEnv *env = unifex_alloc_env();
 
+  shout_like_sleep(state->delay);
   uint64_t start_time = shout_like_get_time();
-  shout_like_sleep(state->interval);
 
-  uint64_t tick_cnt = 1;
+  uint64_t tick_cnt = 0;
   int should_quit = 0;
   while (!should_quit) {
 

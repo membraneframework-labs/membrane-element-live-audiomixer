@@ -22,9 +22,11 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
   @module Membrane.Element.LiveAudioMixer
 
-  @interval 200 |> Time.millisecond()
+  @interval 500 |> Time.millisecond()
 
-  @delay 100 |> Time.millisecond()
+  @in_delay 200 |> Time.millisecond()
+
+  @out_delay 50 |> Time.millisecond()
 
   @caps %Caps{sample_rate: 48_000, format: :s16le, channels: 2}
 
@@ -32,7 +34,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
   @default_options %Membrane.Element.LiveAudioMixer{
     interval: @interval,
-    delay: @delay,
+    in_delay: @in_delay,
+    out_delay: @out_delay,
     caps: @caps,
     timer: Fake.Timer,
     mute_by_default: @mute_by_default
@@ -40,7 +43,8 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
   @empty_state %{
     interval: @interval,
-    delay: @delay,
+    in_delay: @in_delay,
+    out_delay: @out_delay,
     caps: @caps,
     outputs: %{},
     mute_by_default: @mute_by_default,
@@ -57,6 +61,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
         :sink_3 => %{queue: <<1, 2, 3>>, sos: true, eos: false, skip: 0, mute: @mute_by_default}
       },
       next_tick_time: @interval,
+      out_delay: 0,
       timer_ref: :mtimer
   }
 
@@ -118,12 +123,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
         demand = @interval |> Caps.time_to_bytes(@caps)
         assert {:demand, {sink, demand}} in actions
       end)
-    end
-
-    test "generate the appropriate amount of silence" do
-      {{:ok, actions}, _state} = @module.handle_prepared_to_playing(%{}, @dummy_state)
-      silence = @caps |> Caps.sound_of_silence(@interval + @delay)
-      assert {:buffer, {:output, %Buffer{payload: silence}}} in actions
     end
   end
 
@@ -243,6 +242,27 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     test "ignore :tick if playback_state is false" do
       ctx = %{@other_ctx | playback_state: :prepared}
       assert {:ok, @dummy_state} == @module.handle_other(:tick, ctx, @dummy_state)
+    end
+
+    test "generate the appropriate amount of silence if out_delay is set" do
+      delay = 100 |> Time.millisecond()
+      state = %{@dummy_state | out_delay: delay}
+      assert {{:ok, actions}, _state} = @module.handle_other({:tick, 42}, @other_ctx, state)
+
+      silence = @caps |> Caps.sound_of_silence(delay)
+      assert [{:buffer, {:output, %Buffer{payload: ^silence}}} | rest] = actions
+
+      silence = @caps |> Caps.sound_of_silence(@interval)
+      assert rest[:buffer] == {:output, %Buffer{payload: silence}}
+    end
+
+    test "not generate silence if out_delay is set to 0" do
+      state = %{@dummy_state | out_delay: 0}
+      assert {{:ok, actions}, _state} = @module.handle_other({:tick, 42}, @other_ctx, state)
+
+      silence = @caps |> Caps.sound_of_silence(@interval)
+      assert [{:buffer, {:output, %Buffer{payload: ^silence}}} | rest] = actions
+      assert rest[:buffer] == nil
     end
 
     test "filter out pads with eos: true and clear queues for all the others outputs" do

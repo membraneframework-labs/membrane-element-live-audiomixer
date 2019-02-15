@@ -31,12 +31,12 @@ defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
       interval: interval,
       delay: delay,
       timer_ref: nil,
-      tick_cnt: 1,
+      tick_cnt: 0,
       start_time: current_time()
     }
 
     Process.monitor(target)
-    send_after_time = interval |> Time.to_milliseconds()
+    send_after_time = delay |> Time.to_milliseconds()
     Process.send_after(self(), :send_tick, send_after_time)
     {:ok, state}
   end

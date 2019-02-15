@@ -1,4 +1,7 @@
 defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
+  @moduledoc """
+  Timer based on Erlang VM monotonic time
+  """
   use GenServer
 
   alias Membrane.Element.LiveAudioMixer.Timer
@@ -33,8 +36,9 @@ defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
     }
 
     Process.monitor(target)
-    timeout = interval |> Time.to_milliseconds()
-    {:ok, state, timeout}
+    send_after_time = interval |> Time.to_milliseconds()
+    Process.send_after(self(), :send_tick, send_after_time)
+    {:ok, state}
   end
 
   @impl GenServer
@@ -42,11 +46,16 @@ defmodule Membrane.Element.LiveAudioMixer.Timer.Erlang do
     {:stop, :shutdown, state}
   end
 
-  def handle_info(:timeout, %{target: target} = state) do
+  def handle_info(:send_tick, %{target: target} = state) do
     tick_cnt = state.tick_cnt + 1
     next_tick_time = state.start_time + tick_cnt * state.interval
     send(target, {:tick, next_tick_time})
+
     state = %{state | tick_cnt: tick_cnt}
-    {:noreply, state, next_tick_time - current_time()}
+
+    send_after_time = (next_tick_time - current_time()) |> max(0) |> Time.to_milliseconds()
+    Process.send_after(self(), :send_tick, send_after_time)
+
+    {:noreply, state}
   end
 end

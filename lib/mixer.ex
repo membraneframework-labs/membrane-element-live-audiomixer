@@ -3,8 +3,8 @@ defmodule Membrane.Element.LiveAudioMixer do
   An element producing live audio stream by mixing a dynamically changing
   set of input streams.
 
-  When the mixer goes to `:playing` state it sends one interval of silence
-  (or more if the `delay` is greater than 0, see the docs for options: `t:t/0`).
+  When the mixer goes to `:playing` state it sends some silence
+  (configured by `out_delay` see the [docs for options](#module-element-options)).
   From that moment, after each interval of time the mixer takes the data received from
   upstream elements and produces audio with the duration equal to the interval.
 
@@ -25,11 +25,13 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   alias Membrane.Element.LiveAudioMixer.Timer
 
+  @default_mute_val false
+
   def_options interval: [
                 type: :time,
                 description: """
                 Defines an interval of time between each mix of
-                incoming streams. The actual interval used can be rounded up 
+                incoming streams. The actual interval used might be rounded up
                 to make sure the number of frames generated for this time period
                 is an integer.
 
@@ -69,13 +71,6 @@ defmodule Membrane.Element.LiveAudioMixer do
                 element. It should be the same for all the pads.
                 """
               ],
-              mute_by_default: [
-                type: :boolean,
-                description: """
-                Determines whether the newly added pads should be muted by default.
-                """,
-                default: false
-              ],
               timer: [
                 type: :module,
                 description: """
@@ -84,8 +79,22 @@ defmodule Membrane.Element.LiveAudioMixer do
                 default: Timer.Erlang
               ]
 
-  def_output_pads output: [mode: :push, caps: Caps]
-  def_input_pads input: [availability: :on_request, demand_unit: :bytes, caps: Caps]
+  def_output_pad :output, mode: :push, caps: Caps
+
+  def_input_pad :input,
+    availability: :on_request,
+    demand_unit: :bytes,
+    caps: Caps,
+    options: [
+      mute: [
+        type: :boolean,
+        spec: boolean(),
+        default: @default_mute_val,
+        description: """
+        Determines whether the pad will be muted from the start.
+        """
+      ]
+    ]
 
   @impl true
   def handle_init(%__MODULE__{caps: caps, interval: interval} = options) when interval > 0 do
@@ -143,7 +152,7 @@ defmodule Membrane.Element.LiveAudioMixer do
     outputs =
       outputs
       |> Enum.map(fn {pad, data} ->
-        {pad, %{data | queue: <<>>, skip: 0, mute: state.mute_by_default}}
+        {pad, %{data | queue: <<>>, skip: 0, mute: @default_mute_val}}
       end)
       |> Map.new()
 
@@ -151,7 +160,7 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_pad_added(pad, _ctx, state) do
+  def handle_pad_added(pad, ctx, state) do
     state =
       state
       |> Bunch.Access.put_in([:outputs, pad], %{
@@ -159,7 +168,7 @@ defmodule Membrane.Element.LiveAudioMixer do
         sos: false,
         eos: false,
         skip: 0,
-        mute: state.mute_by_default
+        mute: ctx.options[:mute]
       })
 
     {:ok, state}

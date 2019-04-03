@@ -37,8 +37,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     in_delay: @in_delay,
     out_delay: @out_delay,
     caps: @caps,
-    timer: Fake.Timer,
-    mute_by_default: @mute_by_default
+    timer: Fake.Timer
   }
 
   @empty_state %{
@@ -47,7 +46,6 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     out_delay: @out_delay,
     caps: @caps,
     outputs: %{},
-    mute_by_default: @mute_by_default,
     next_tick_time: nil,
     timer: Fake.Timer,
     timer_ref: nil
@@ -148,9 +146,17 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
     playback_state: :playing
   }
 
+  @pad_added_ctx %Ctx.PadAdded{
+    direction: :input,
+    options: %{mute: @mute_by_default},
+    pads: %{},
+    playback_state: :playing
+  }
+
   describe "handle_pad_added should" do
     test "add an instance to outputs map" do
-      assert {:ok, %{outputs: outputs}} = @module.handle_pad_added(:sink_4, %{}, @dummy_state)
+      assert {:ok, %{outputs: outputs}} =
+               @module.handle_pad_added(:sink_4, @pad_added_ctx, @dummy_state)
 
       assert outputs |> Map.to_list() |> length == 4
       assert outputs |> Map.has_key?(:sink_4)
@@ -181,7 +187,7 @@ defmodule Membrane.Element.LiveAudioMixer.Test do
 
     test "generate the appropriate demand for a given pad (on StartOfStream event)" do
       sink = :sink_4
-      assert {:ok, state} = @module.handle_pad_added(sink, %{}, @dummy_state)
+      assert {:ok, state} = @module.handle_pad_added(sink, @pad_added_ctx, @dummy_state)
 
       assert {{:ok, actions}, _state} =
                @module.handle_event(sink, %Event.StartOfStream{}, @event_ctx, state)

@@ -175,18 +175,6 @@ defmodule Membrane.Element.LiveAudioMixer do
   end
 
   @impl true
-  def handle_pad_removed(pad, _ctx, state) do
-    state =
-      if state.outputs |> Map.has_key?(pad) do
-        state |> Bunch.Access.put_in([:outputs, pad, :eos], true)
-      else
-        state
-      end
-
-    {:ok, state}
-  end
-
-  @impl true
   def handle_event(pad, %Event.StartOfStream{}, _ctx, state) do
     %{next_tick_time: next, caps: caps, interval: interval} = state
     default_demand = state |> get_default_demand
@@ -236,7 +224,7 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   @impl true
   def handle_other(
-        {:tick, _} = tick,
+        {:tick, _time} = tick,
         %{playback_state: :playing} = ctx,
         %{out_delay: out_delay, caps: caps} = state
       )
@@ -246,8 +234,9 @@ defmodule Membrane.Element.LiveAudioMixer do
       |> Caps.sound_of_silence(out_delay)
       ~> {:buffer, {:output, %Buffer{payload: &1}}}
 
-    {{:ok, actions}, state} = handle_other(tick, ctx, %{state | out_delay: 0})
-    {{:ok, [silence | actions]}, state}
+    with {{:ok, actions}, state} <- handle_other(tick, ctx, %{state | out_delay: 0}) do
+      {{:ok, [silence | actions]}, state}
+    end
   end
 
   def handle_other({:tick, time}, %{playback_state: :playing}, state) do
@@ -268,31 +257,27 @@ defmodule Membrane.Element.LiveAudioMixer do
     {{:ok, actions}, state}
   end
 
-  def handle_other({:mute, pad_ref}, _ctx, %{outputs: outputs} = state) do
-    state =
-      if outputs |> Map.has_key?(pad_ref) do
-        state |> Bunch.Access.put_in([:outputs, pad_ref, :mute], true)
-      else
-        warn("Mute error: No such pad #{inspect(pad_ref)}")
-        state
-      end
+  def handle_other({:mute, pad_ref}, _ctx, state) do
+    do_mute(pad_ref, true, state)
+  end
 
+  def handle_other({:unmute, pad_ref}, _ctx, state) do
+    do_mute(pad_ref, false, state)
+  end
+
+  def handle_other(_message, _ctx, state) do
     {:ok, state}
   end
 
-  def handle_other({:unmute, pad_ref}, _ctx, %{outputs: outputs} = state) do
+  defp do_mute(pad_ref, mute?, %{outputs: outputs} = state) do
     state =
       if outputs |> Map.has_key?(pad_ref) do
-        state |> Bunch.Access.put_in([:outputs, pad_ref, :mute], false)
+        state |> Bunch.Access.put_in([:outputs, pad_ref, :mute], mute?)
       else
         warn("Unmute error: No such pad #{inspect(pad_ref)}")
         state
       end
 
-    {:ok, state}
-  end
-
-  def handle_other(_message, _ctx, state) do
     {:ok, state}
   end
 
@@ -313,12 +298,12 @@ defmodule Membrane.Element.LiveAudioMixer do
     |> AudioMix.mix_tracks(caps)
   end
 
-  defp update_outputs(outputs, skip_add) do
+  defp update_outputs(outputs, skip_to_add) do
     outputs
     |> Enum.filter(fn {_pad, %{eos: eos}} -> not eos end)
     |> Enum.map(fn {pad, %{sos: started?, queue: queue, skip: skip} = data} ->
       if started? do
-        skip = skip + skip_add - byte_size(queue)
+        skip = skip + skip_to_add - byte_size(queue)
         {pad, %{data | queue: <<>>, skip: skip}}
       else
         {pad, data}
@@ -333,7 +318,7 @@ defmodule Membrane.Element.LiveAudioMixer do
     state.outputs
     |> Enum.flat_map(fn {pad, %{skip: skip, sos: started?}} ->
       if started? do
-        [{:demand, {pad, demand + skip}}]
+        [demand: {pad, demand + skip}]
       else
         []
       end

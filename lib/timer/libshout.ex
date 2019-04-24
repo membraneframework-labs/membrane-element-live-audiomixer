@@ -31,9 +31,10 @@ defmodule Membrane.Element.LiveAudioMixer.Timer.LibShout do
 
   @impl GenServer
   def init([target, interval, delay]) do
-    with interval = interval |> Time.to_milliseconds(),
-         delay = delay |> Time.to_milliseconds(),
-         {:ok, timer_ref} <- start_native_sender(target, interval, delay) do
+    interval = interval |> Time.to_milliseconds()
+    delay = delay |> Time.to_milliseconds()
+
+    with {:ok, timer_ref} <- start_native_sender(target, interval, delay) do
       state = %{timer_ref: timer_ref}
 
       Process.monitor(target)

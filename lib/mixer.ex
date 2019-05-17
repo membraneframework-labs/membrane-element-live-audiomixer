@@ -247,7 +247,7 @@ defmodule Membrane.Element.LiveAudioMixer do
     payload = state |> mix_tracks
 
     demand = state |> get_default_demand
-    outputs = outputs |> update_outputs(demand)
+    outputs = outputs |> skip_queued_data(demand)
 
     state = %{state | outputs: outputs, next_tick_time: time}
 
@@ -298,12 +298,12 @@ defmodule Membrane.Element.LiveAudioMixer do
     |> AudioMix.mix_tracks(caps)
   end
 
-  defp update_outputs(outputs, skip_to_add) do
+  defp skip_queued_data(outputs, to_skip) do
     outputs
     |> Enum.filter(fn {_pad, %{eos: eos}} -> not eos end)
-    |> Enum.map(fn {pad, %{sos: started?, queue: queue, skip: skip} = data} ->
+    |> Enum.map(fn {pad, %{sos: started?, queue: queue, skip: old_skip} = data} ->
       if started? do
-        skip = skip + skip_to_add - byte_size(queue)
+        skip = old_skip + to_skip - byte_size(queue)
         {pad, %{data | queue: <<>>, skip: skip}}
       else
         {pad, data}

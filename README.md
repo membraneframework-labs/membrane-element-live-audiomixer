@@ -1,9 +1,9 @@
 # Membrane.Element.LiveAudioMixer
 
-## Waring: this element is experimental!
+## Warning: this element is experimental!
 
-The element is a simple mixer that compines audio from different sources.
-It is designed for use as a live source, meaning it will produce audio stream
+The element is a simple mixer that combines audio from different sources.
+It is designed for use as a live source, meaning it will produce an audio stream
 even if some (or all) of the sources fail to provide enough data.
 
 ## Installation

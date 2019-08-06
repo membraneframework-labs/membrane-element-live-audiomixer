@@ -17,7 +17,7 @@ defmodule Membrane.Element.LiveAudioMixer do
 
   use Bunch
   use Membrane.Log, tags: :membrane_element_live_audiomixer
-  use Membrane.Element.Base.Filter
+  use Membrane.Filter
 
   alias Membrane.{Buffer, Event, Time}
   alias Membrane.Caps.Audio.Raw, as: Caps

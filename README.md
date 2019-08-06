@@ -1,5 +1,7 @@
 # Membrane.Element.LiveAudioMixer
 
+[![CircleCI](https://circleci.com/gh/membraneframework/membrane-element-live-audiomixer.svg?style=svg)](https://circleci.com/gh/membraneframework/membrane-element-live-audiomixer)
+
 ## Warning: this element is experimental!
 
 The element is a simple mixer that combines audio from different sources.
